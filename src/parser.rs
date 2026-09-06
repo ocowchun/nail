@@ -1,0 +1,572 @@
+use std::mem;
+
+use crate::ast::BinaryExpression;
+use crate::ast::BinaryOperator;
+use crate::ast::CallExpression;
+use crate::ast::Expression;
+use crate::ast::FloatLiteral;
+use crate::ast::LabelMatcher;
+use crate::ast::LabelMatcherOperator;
+use crate::ast::TimeDuration;
+use crate::ast::TimeSeries;
+use crate::lexer::Lexer;
+
+use crate::lexer::Token;
+use crate::lexer::TokenType;
+use crate::lexer::TokenType::LeftBrace;
+use crate::lexer::TokenType::TimeDurationLiteral;
+
+pub struct Parser {
+    lexer: Lexer,
+    current_token: Token,
+    peek_token: Token,
+    error: Option<String>,
+}
+
+impl Parser {
+    pub fn new(lexer: Lexer) -> Parser {
+        let mut p = Parser {
+            lexer,
+            current_token: Token::new(TokenType::EOF, "".to_string()),
+            peek_token: Token::new(TokenType::EOF, "".to_string()),
+            error: None,
+        };
+        p.next_token();
+        p.next_token();
+
+        p
+    }
+
+    fn next_token(&mut self) -> Option<Token> {
+        if let Some(_) = &self.error {
+            return None;
+        }
+
+        match self.lexer.next_token() {
+            Ok(mut token) => {
+                mem::swap(&mut self.peek_token, &mut token);
+                mem::swap(&mut self.current_token, &mut token);
+                return Some(token);
+            }
+            Err(err) => {
+                let mut token = Token::new(TokenType::EOF, "".to_string());
+                mem::swap(&mut self.current_token, &mut token);
+                mem::swap(&mut self.peek_token, &mut self.current_token);
+                match err.as_str() {
+                    "EOF" => {
+                        self.peek_token = Token::new(TokenType::EOF, "".to_string());
+                    }
+                    _ => {
+                        // TODO: what should be the peek_token in this branch?
+                        self.error = Some(err);
+                    }
+                }
+                return Some(token);
+            }
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<Expression, String> {
+        if let Some(err) = &self.error {
+            return Err(err.to_string());
+        }
+
+        self.parse_expression()
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression, String> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_and_unless()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::Or => BinaryOperator::Or,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_and_unless()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_and_unless(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_comparison()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::And => BinaryOperator::And,
+                TokenType::Unless => BinaryOperator::Unless,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_comparison()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_term()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::EqualEqual => BinaryOperator::Equal,
+                TokenType::NotEqual => BinaryOperator::NotEqual,
+                TokenType::LessThanOrEqual => BinaryOperator::LessThanOrEqual,
+                TokenType::LessThan => BinaryOperator::LessThan,
+                TokenType::GreaterThanOrEqual => BinaryOperator::GreaterThanOrEqual,
+                TokenType::GreaterThan => BinaryOperator::GreaterThan,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_term()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_term(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_factor()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::Plus => BinaryOperator::Plus,
+                TokenType::Minus => BinaryOperator::Minus,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_factor()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_factor(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_caret()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::Asterisk => BinaryOperator::Multiply,
+                TokenType::Slash => BinaryOperator::Divide,
+                TokenType::Percent => BinaryOperator::Mod,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_caret()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_caret(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_primary()?;
+
+        loop {
+            let op = match self.current_token.token_type {
+                TokenType::Caret => BinaryOperator::Power,
+                _ => {
+                    break;
+                }
+            };
+            self.next_token();
+
+            let right = self.parse_primary()?;
+
+            left = Expression::BinaryExpression(BinaryExpression::new(
+                op,
+                Box::new(left),
+                Box::new(right),
+            ));
+        }
+
+        Ok(left)
+    }
+
+    // fn parse_call(&mut self) -> Result<Expression, String> {
+    //     let exp = self.parse_primary()?;
+
+    //     if self.current_token.is(TokenType::LeftParenthesis) {
+    //         if let Expression::Identifier(callee) = exp {
+    //             self.next_token();
+    //             return self.finish_call(callee);
+    //         } else {
+    //             return Err(format!(
+    //                 "expected identifier before `(` but got {}",
+    //                 self.current_token.literal
+    //             ));
+    //         }
+    //     }
+
+    //     Ok(exp)
+    // }
+
+    fn finish_call(&mut self, callee: String) -> Result<Expression, String> {
+        let mut arguments = vec![];
+
+        while !self.current_token.is(TokenType::RightParenthesis) {
+            if !arguments.is_empty() {
+                if !self.current_token.is(TokenType::Comma) {
+                    return Err(format!(
+                        "expected `,` when parsing call got {}",
+                        self.current_token.literal
+                    ));
+                }
+                self.next_token();
+            }
+
+            let arg = self.parse_comparison()?;
+            arguments.push(Box::new(arg));
+        }
+
+        self.next_token();
+
+        let call = CallExpression::new(callee, arguments);
+        Ok(Expression::CallExpression(call))
+    }
+
+    fn parse_primary(&mut self) -> Result<Expression, String> {
+        if self.current_token.is(TokenType::IntegerLiteral)
+            || self.current_token.is(TokenType::FloatLiteral)
+        {
+            let token = self.next_token().unwrap();
+            let lit = FloatLiteral::new(token.literal);
+            return Ok(Expression::FloatLiteral(lit));
+        }
+        if self.current_token.is(TokenType::StringLiteral) {
+            let token = self.next_token().unwrap();
+            let lit = token.literal;
+
+            return Ok(Expression::StringLiteral(lit));
+        }
+
+        if self.current_token.is(TokenType::LeftParenthesis) {
+            self.next_token();
+            let exp = self.parse_expression()?;
+            if self.current_token.is(TokenType::RightParenthesis) {
+                self.next_token();
+                // TODO: might need a new expression type?
+                return Ok(exp);
+            } else {
+                return Err(format!("expected `)` got {}", self.current_token.literal,));
+            }
+        }
+
+        if self.current_token.is(TokenType::Identifier) {
+            if self.peek_token.is(TokenType::LeftParenthesis) {
+                let token = self.next_token().unwrap();
+                return self.finish_call(token.literal);
+            }
+            return self.parse_timeseries();
+        }
+
+        Err(format!(
+            "failed to parse primary from `{}`",
+            self.current_token.literal,
+        ))
+    }
+
+    fn parse_timeseries(&mut self) -> Result<Expression, String> {
+        let name = self.next_token().unwrap().literal;
+        let mut label_matchers = vec![];
+
+        if self.current_token.is(LeftBrace) {
+            self.next_token();
+            while !self.current_token.is(TokenType::RightBrace) {
+                if !label_matchers.is_empty() {
+                    if !self.current_token.is(TokenType::Comma) {
+                        return Err(format!(
+                            "expect , when parsing label_matcher but got `{}`",
+                            self.current_token.literal,
+                        ));
+                    }
+                    self.next_token();
+                }
+
+                if !self.current_token.is(TokenType::Identifier) {
+                    return Err(format!(
+                        "expect identifier when parsing label_matcher but got `{}`",
+                        self.current_token.literal,
+                    ));
+                }
+                let label_name = self.next_token().unwrap().literal;
+                let op = match self.current_token.token_type {
+                    TokenType::Equal => LabelMatcherOperator::Equal,
+                    TokenType::NotEqual => LabelMatcherOperator::NotEqual,
+                    TokenType::RegexMatch => LabelMatcherOperator::RegexMatch,
+                    TokenType::NotRegexMatch => LabelMatcherOperator::NotRegexMatch,
+                    _ => {
+                        return Err(format!(
+                            "expect label matcher operator when parsing label_matcher but got `{}`",
+                            self.current_token.literal,
+                        ));
+                    }
+                };
+                self.next_token();
+
+                if !self.current_token.is(TokenType::StringLiteral) {
+                    return Err(format!(
+                        "expect string literal when parsing label_matcher but got `{}`",
+                        self.current_token.literal,
+                    ));
+                }
+                let label_value = self.next_token().unwrap().literal;
+                let matcher = LabelMatcher::new(op, label_name, label_value);
+                label_matchers.push(matcher);
+            }
+
+            self.next_token();
+        }
+
+        let range = if self.current_token.is(TokenType::LeftBracket) {
+            self.next_token();
+            if !self.current_token.is(TimeDurationLiteral) {
+                return Err(format!(
+                    "expect time duration literal when parsing range but got `{}`",
+                    self.current_token.literal,
+                ));
+            }
+
+            let token = self.next_token().unwrap();
+            let duration = TimeDuration::from(token.literal)?;
+            if !self.current_token.is(TokenType::RightBracket) {
+                return Err(format!(
+                    "expect `]` when parsing range but got `{}`",
+                    self.current_token.literal,
+                ));
+            }
+            self.next_token();
+            Some(duration)
+        } else {
+            None
+        };
+
+        let offset = if self.current_token.is(TokenType::Offset) {
+            self.next_token();
+            let token = self.next_token().unwrap();
+            let duration = TimeDuration::from(token.literal)?;
+            Some(duration)
+        } else {
+            None
+        };
+
+        let exp = TimeSeries::new(name, label_matchers, range, offset);
+        Ok(Expression::TimeSeries(exp))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_expression() {
+        let lexer = Lexer::new("http_requests_total".to_string());
+        let mut parser = Parser::new(lexer);
+
+        let exp = parser.parse().unwrap();
+        let expected_exp = Expression::TimeSeries(TimeSeries::new(
+            "http_requests_total".to_string(),
+            vec![],
+            None,
+            None,
+        ));
+
+        assert_eq!(exp, expected_exp);
+    }
+
+    #[test]
+    fn parse_timeseries() {
+        let series = vec![
+            (
+                "http_requests_total",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![],
+                    None,
+                    None,
+                )),
+            ),
+            (
+                "http_requests_total{replica=\"rep-a\"}",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![LabelMatcher::new(
+                        LabelMatcherOperator::Equal,
+                        "replica".to_string(),
+                        "rep-a".to_string(),
+                    )],
+                    None,
+                    None,
+                )),
+            ),
+            (
+                "http_requests_total{job=\"prometheus\"}[5m]",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![LabelMatcher::new(
+                        LabelMatcherOperator::Equal,
+                        "job".to_string(),
+                        "prometheus".to_string(),
+                    )],
+                    Some(TimeDuration::from("5m".to_string()).unwrap()),
+                    None,
+                )),
+            ),
+            (
+                "http_requests_total offset 5m",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![],
+                    None,
+                    Some(TimeDuration::from("5m".to_string()).unwrap()),
+                )),
+            ),
+            (
+                "http_requests_total[5m] offset 1w",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![],
+                    Some(TimeDuration::from("5m".to_string()).unwrap()),
+                    Some(TimeDuration::from("1w".to_string()).unwrap()),
+                )),
+            ),
+            (
+                "http_requests_total{method=\"GET\"} offset 5m",
+                Expression::TimeSeries(TimeSeries::new(
+                    "http_requests_total".to_string(),
+                    vec![LabelMatcher::new(
+                        LabelMatcherOperator::Equal,
+                        "method".to_string(),
+                        "GET".to_string(),
+                    )],
+                    None,
+                    Some(TimeDuration::from("5m".to_string()).unwrap()),
+                )),
+            ),
+        ];
+        series.into_iter().for_each(|(query, expected_exp)| {
+            let lexer = Lexer::new(query.to_string());
+            let mut parser = Parser::new(lexer);
+            let exp = parser.parse().unwrap();
+
+            assert_eq!(exp, expected_exp);
+        });
+    }
+
+    #[test]
+    fn parse_or_operator() {
+        let lexer = Lexer::new("foo or bar".to_string());
+        let mut parser = Parser::new(lexer);
+
+        let exp = parser.parse().unwrap();
+        let expected_exp = Expression::BinaryExpression(BinaryExpression::new(
+            BinaryOperator::Or,
+            Box::new(Expression::TimeSeries(TimeSeries::new(
+                "foo".to_string(),
+                vec![],
+                None,
+                None,
+            ))),
+            Box::new(Expression::TimeSeries(TimeSeries::new(
+                "bar".to_string(),
+                vec![],
+                None,
+                None,
+            ))),
+        ));
+
+        assert_eq!(exp, expected_exp);
+    }
+
+    #[test]
+    fn parse_binary_operator() {
+        let operators = vec![
+            ("and", BinaryOperator::And),
+            ("or", BinaryOperator::Or),
+            ("unless", BinaryOperator::Unless),
+            ("==", BinaryOperator::Equal),
+            ("!=", BinaryOperator::NotEqual),
+            (">", BinaryOperator::GreaterThan),
+            ("<", BinaryOperator::LessThan),
+            ("+", BinaryOperator::Plus),
+            ("-", BinaryOperator::Minus),
+            ("*", BinaryOperator::Multiply),
+            ("/", BinaryOperator::Divide),
+            ("%", BinaryOperator::Mod),
+            ("^", BinaryOperator::Power),
+        ];
+        operators.iter().for_each(|(op_str, op)| {
+            let query = format!("foo {op_str} bar");
+            let lexer = Lexer::new(query);
+            let mut parser = Parser::new(lexer);
+
+            let exp = parser.parse().unwrap();
+            let expected_exp = Expression::BinaryExpression(BinaryExpression::new(
+                op.clone(),
+                Box::new(Expression::TimeSeries(TimeSeries::new(
+                    "foo".to_string(),
+                    vec![],
+                    None,
+                    None,
+                ))),
+                Box::new(Expression::TimeSeries(TimeSeries::new(
+                    "bar".to_string(),
+                    vec![],
+                    None,
+                    None,
+                ))),
+            ));
+
+            assert_eq!(exp, expected_exp);
+        });
+    }
+}
