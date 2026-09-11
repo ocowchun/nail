@@ -58,19 +58,14 @@ impl Labels {
         Ok(Self { labels })
     }
 
-    pub fn labels(&self) -> &[Label] {
-        &self.labels
+    pub fn labels(&self) -> Vec<Label> {
+        self.labels.clone()
     }
 
     pub fn merge(&self, other: &Labels) -> Result<Labels, String> {
         let labels = vec![self, other]
             .iter()
-            .map(|ls| {
-                ls.labels()
-                    .iter()
-                    .map(|l| l.clone())
-                    .collect::<Vec<Label>>()
-            })
+            .map(|ls| ls.labels())
             .collect::<Vec<Vec<Label>>>()
             .concat();
         Self::from(labels)

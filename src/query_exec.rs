@@ -1,12 +1,22 @@
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashMap, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
+
+use serde_json::value;
 
 use crate::{
-    analyzer::{Analyzer, Binary, Call, InstantSelector, Plan},
-    ast::BinaryOperator,
-    core::Label,
+    analyzer::{
+        Analyzer, Binary, Call, ExpressionType, InstantSelector, Plan, RangeSelector, SimpleAgg,
+    },
+    ast::{BinaryOperator, LabelMatcher, SimpleAggregationOperator},
+    core::{Label, Labels},
+    function::EvalValue,
     head::{Head, QuerySeries, Sample, TimeRange, TimestampSecond},
     lexer::Lexer,
     parser::Parser,
+    query_exec::Accumulator::{Avg, Sum},
     request::{QueryRangeRequest, QueryRequest},
 };
 
@@ -31,7 +41,7 @@ impl QueryExec {
         let start = req.time.as_seconds() as i64;
         let query_points = vec![start];
 
-        let mut iter = self.evaluate(&plan, &query_points)?;
+        let mut iter = self.evaluate(plan, &query_points)?;
 
         let mut result = vec![];
         loop {
@@ -68,7 +78,7 @@ impl QueryExec {
             })
             .collect();
 
-        let mut iter = self.evaluate(&plan, &query_points)?;
+        let mut iter = self.evaluate(plan, &query_points)?;
 
         let mut result = vec![];
         loop {
@@ -85,7 +95,7 @@ impl QueryExec {
     // try to run each sub plan for the whole time range, and then emit
     fn evaluate(
         &self,
-        plan: &Plan,
+        plan: Plan,
         query_points: &Vec<i64>,
     ) -> Result<Box<dyn InstantSeriesIterator>, String> {
         match plan {
@@ -104,7 +114,10 @@ impl QueryExec {
             Plan::Call(call) => {
                 todo!();
             }
-            Plan::Binary(binary) => self.eval_binary(&binary, &query_points),
+            Plan::Binary(binary) => self.eval_binary(binary, &query_points),
+            Plan::SimpleAgg(simple_agg) => {
+                return self.eval_simple_aggregation(simple_agg, &query_points);
+            }
         }
     }
 
@@ -119,37 +132,97 @@ impl QueryExec {
 
     fn eval_instant_selector(
         &self,
-        selector: &InstantSelector,
+        selector: InstantSelector,
         query_points: &Vec<i64>,
     ) -> Result<Box<dyn InstantSeriesIterator>, String> {
-        let matchers = &selector.matchers;
-        let range = TimeRange {
-            start: TimestampSecond(query_points.first().unwrap().clone()),
-            end: TimestampSecond(query_points.last().unwrap().clone()),
-        };
-
-        let query_series = self.head.query_range(matchers, range);
-        let iter = SeriesIterator::new(query_series, query_points.clone());
+        let iter = HeadInstantSeriesIterator::new(
+            selector.matchers,
+            Arc::clone(&self.head),
+            query_points.clone(),
+        );
         Ok(Box::new(iter))
     }
 
-    fn eval_call(&self, call: &Call, query_points: &Vec<i64>) -> Result<InstantSeries, String> {
-        todo!()
+    fn eval_range_selector(
+        &self,
+        selector: RangeSelector,
+        query_points: &Vec<i64>,
+    ) -> Result<Box<dyn RangeSeriesIterator>, String> {
+        let iter = HeadRangeSeriesIterator::new(
+            selector.matchers,
+            Arc::clone(&self.head),
+            selector.range.clone(),
+            query_points.clone(),
+        );
+        Ok(Box::new(iter))
+    }
+
+    fn eval_call(
+        &self,
+        call: Call,
+        query_points: &Vec<i64>,
+    ) -> Result<Box<dyn InstantSeriesIterator>, String> {
+        let mut args = vec![];
+        for arg in call.args.into_iter() {
+            let arg = match arg {
+                Plan::Number(num) => EvalValue::Scalar(num),
+                Plan::String(str) => EvalValue::String(str),
+                Plan::InstantSelector(instant_selector) => {
+                    let iter = self.eval_instant_selector(instant_selector, query_points)?;
+                    EvalValue::Instant(iter)
+                }
+                Plan::RangeSelector(range_selector) => {
+                    let iter = self.eval_range_selector(range_selector, query_points)?;
+                    EvalValue::Range(iter)
+                }
+                Plan::Call(call) => {
+                    let iter = self.eval_call(call, query_points)?;
+                    EvalValue::Instant(iter)
+                }
+                Plan::Binary(binary) => {
+                    let iter = self.eval_binary(binary, query_points)?;
+                    EvalValue::Instant(iter)
+                }
+
+                Plan::SimpleAgg(simple_agg) => {
+                    let iter = self.eval_simple_aggregation(simple_agg, query_points)?;
+                    EvalValue::Instant(iter)
+                }
+            };
+            args.push(arg);
+        }
+        let res = (call.spec.eval)(args)?;
+
+        return match res {
+            EvalValue::Instant(iter) => Ok(iter),
+            _ => return Err(format!("unexpedcted eval type")),
+        };
     }
 
     fn eval_binary(
         &self,
-        binary: &Binary,
+        binary: Binary,
         query_points: &Vec<i64>,
     ) -> Result<Box<dyn InstantSeriesIterator>, String> {
-        let left_iter = self.evaluate(&binary.lhs, query_points)?;
-        let right_iter = self.evaluate(&binary.rhs, query_points)?;
+        let left_iter = self.evaluate(*binary.lhs, query_points)?;
+        let right_iter = self.evaluate(*binary.rhs, query_points)?;
 
-        let iter = BinaryIterator::new(
-            query_points.clone(),
-            binary.op.clone(),
-            left_iter,
-            right_iter,
+        let iter = BinaryIterator::new(binary.op.clone(), left_iter, right_iter);
+        Ok(Box::new(iter))
+    }
+
+    fn eval_simple_aggregation(
+        &self,
+        simple_agg: SimpleAgg,
+        query_points: &Vec<i64>,
+    ) -> Result<Box<dyn InstantSeriesIterator>, String> {
+        let inner_iter = self.evaluate(*simple_agg.inner_plan, query_points)?;
+
+        let iter = SimpleAggregationIterator::new(
+            simple_agg.op,
+            inner_iter,
+            simple_agg.is_without,
+            simple_agg.labels,
         );
         Ok(Box::new(iter))
     }
@@ -173,7 +246,13 @@ pub struct InstantSeries {
     pub samples: Vec<Sample>,
 }
 
-trait InstantSeriesIterator {
+impl InstantSeries {
+    pub fn new(labels: Vec<Label>, samples: Vec<Sample>) -> Self {
+        Self { labels, samples }
+    }
+}
+
+pub trait InstantSeriesIterator {
     fn next(&mut self) -> Result<Option<InstantSeries>, String>;
 }
 
@@ -218,16 +297,40 @@ impl InstantSeriesIterator for NumberIterator {
     }
 }
 
-struct SeriesIterator {
+struct HeadInstantSeriesIterator {
     series_list: Vec<InstantSeries>,
-    cursor: usize,
+    matchers: Vec<LabelMatcher>,
+    head: Arc<Head>,
+    query_points: Vec<i64>,
+    is_ready: bool,
 }
 
-impl SeriesIterator {
-    fn new(query_series: Vec<QuerySeries>, query_points: Vec<i64>) -> Self {
+impl HeadInstantSeriesIterator {
+    fn new(matchers: Vec<LabelMatcher>, head: Arc<Head>, query_points: Vec<i64>) -> Self {
+        Self {
+            series_list: vec![],
+            matchers,
+            head,
+            query_points,
+            is_ready: false,
+        }
+    }
+
+    fn load_data(&mut self) {
+        if self.is_ready {
+            panic!("doule call load data");
+        }
+
         // 5 min
-        let loopback_period = 5 * 3600;
-        // let loopback_period = 0;
+        let lookback_period = 5 * 3600;
+        let start = 0.max(self.query_points.first().unwrap() - lookback_period);
+
+        let range = TimeRange {
+            start: TimestampSecond(start),
+            end: TimestampSecond(self.query_points.last().unwrap().clone()),
+        };
+        println!("load_data range {:?}", range);
+        let query_series = self.head.query_range(&self.matchers, range);
         let mut iter = query_series.iter();
 
         let mut series_list = vec![];
@@ -238,7 +341,7 @@ impl SeriesIterator {
             let mut candidate = None;
 
             println!("series len -> {}", series.samples.len());
-            for query_point in query_points.iter() {
+            for query_point in self.query_points.iter() {
                 // println!("target_timestamp -> {}", target_timestamp.0);
                 while cursor < series.samples.len()
                     && series.samples[cursor].timestamp <= TimestampSecond(*query_point)
@@ -247,10 +350,10 @@ impl SeriesIterator {
                     candidate = Some(series.samples[cursor]);
                     cursor += 1;
                 }
-                let threshold = if (*query_point >= loopback_period) {
+                let threshold = if *query_point >= lookback_period {
                     TimestampSecond(0)
                 } else {
-                    TimestampSecond(*query_point - loopback_period)
+                    TimestampSecond(*query_point - lookback_period)
                 };
                 if let Some(sample) = candidate
                     && sample.timestamp >= threshold
@@ -266,27 +369,22 @@ impl SeriesIterator {
                 samples: samples,
             });
         }
-
-        Self {
-            series_list,
-            cursor: 0,
-        }
+        self.series_list = series_list;
     }
 }
 
-impl InstantSeriesIterator for SeriesIterator {
+impl InstantSeriesIterator for HeadInstantSeriesIterator {
     fn next(&mut self) -> Result<Option<InstantSeries>, String> {
-        if self.series_list.is_empty() {
-            return Ok(None);
+        if !self.is_ready {
+            self.load_data();
+            self.is_ready = true;
         }
 
-        let series = self.series_list.pop().unwrap();
-        return Ok(Some(series));
+        Ok(self.series_list.pop())
     }
 }
 
 struct BinaryIterator {
-    query_points: Vec<i64>,
     op: BinaryOperator,
     left_iter: Box<dyn InstantSeriesIterator>,
     right_iter: Box<dyn InstantSeriesIterator>,
@@ -299,13 +397,11 @@ struct BinaryIterator {
 
 impl BinaryIterator {
     fn new(
-        query_points: Vec<i64>,
         op: BinaryOperator,
         left_iter: Box<dyn InstantSeriesIterator>,
         right_iter: Box<dyn InstantSeriesIterator>,
     ) -> Self {
         Self {
-            query_points,
             op,
             left_iter,
             right_iter,
@@ -417,13 +513,291 @@ impl InstantSeriesIterator for BinaryIterator {
     }
 }
 
-struct RangeSeries {
-    labels: Vec<Label>,
-    samples: Vec<Vec<Sample>>,
+struct SimpleAggregationIterator {
+    op: SimpleAggregationOperator,
+    inner_iter: Box<dyn InstantSeriesIterator>,
+    is_without: bool,
+    labels: Vec<String>,
+    state: SimpleAggregationIteratorState,
+    series_list: Vec<InstantSeries>,
 }
 
-trait RangeSeriesIterator {
+#[derive(PartialEq, Debug, Clone, Eq)]
+enum SimpleAggregationIteratorState {
+    Uninitialized,
+    Ready,
+    Done,
+}
+
+enum Accumulator {
+    Sum(f64),
+    Avg { sum: f64, count: u64 },
+    Min(f64),
+    Max(f64),
+    Count(u64),
+    Group,
+}
+
+impl Accumulator {
+    fn new(op: &SimpleAggregationOperator, value: f64) -> Self {
+        match op {
+            SimpleAggregationOperator::Sum => Self::Sum(0.0),
+            SimpleAggregationOperator::Avg => Self::Avg {
+                sum: value,
+                count: 1,
+            },
+            SimpleAggregationOperator::Min => Self::Min(f64::MIN),
+            SimpleAggregationOperator::Max => Self::Max(f64::MAX),
+            SimpleAggregationOperator::Group => Self::Group,
+            SimpleAggregationOperator::Count => Self::Sum(0.0),
+            SimpleAggregationOperator::Stddev => todo!(),
+            SimpleAggregationOperator::Stdvar => todo!(),
+        }
+    }
+
+    fn observe(&mut self, sample: f64) {
+        match self {
+            Self::Sum(sum) => *sum += sample,
+            Self::Avg { sum, count } => {
+                *sum += sample;
+                *count += 1;
+            }
+            Self::Min(min) => *min = min.min(sample),
+            Self::Max(max) => *max = max.max(sample),
+            Self::Count(count) => *count += 1,
+            Self::Group => {}
+        }
+    }
+
+    fn value(&self) -> f64 {
+        match self {
+            Sum(sum) => *sum,
+            Avg { sum, count } => *sum / *count as f64,
+            Accumulator::Min(min) => *min,
+            Accumulator::Max(max) => *max,
+            Accumulator::Count(count) => *count as f64,
+            Accumulator::Group => 1.0,
+        }
+    }
+}
+
+impl SimpleAggregationIterator {
+    fn new(
+        op: SimpleAggregationOperator,
+        inner_iter: Box<dyn InstantSeriesIterator>,
+        is_without: bool,
+        labels: Vec<String>,
+    ) -> Self {
+        Self {
+            op,
+            inner_iter,
+            is_without,
+            labels,
+            state: SimpleAggregationIteratorState::Uninitialized,
+            series_list: vec![],
+        }
+    }
+
+    fn drain_and_aggregate(&mut self) -> Result<(), String> {
+        let mut store: HashMap<Labels, BTreeMap<TimestampSecond, Accumulator>> = HashMap::new();
+        loop {
+            let entry = self.inner_iter.next()?;
+            if let Some(series) = entry {
+                let labels = self.compute_labels(series.labels)?;
+                if let Some(map) = store.get_mut(&labels) {
+                    for sample in series.samples.into_iter() {
+                        let key = sample.timestamp;
+                        map.entry(key)
+                            .and_modify(|acc| acc.observe(sample.value))
+                            .or_insert_with(|| Accumulator::new(&self.op, sample.value));
+                    }
+                } else {
+                    let mut sub_map: BTreeMap<TimestampSecond, Accumulator> = BTreeMap::new();
+                    for sample in series.samples.into_iter() {
+                        let key = sample.timestamp;
+                        sub_map.insert(key, Accumulator::new(&self.op, sample.value));
+                    }
+                    store.insert(labels, sub_map);
+                }
+            } else {
+                break;
+            }
+        }
+
+        // let mut series
+        self.series_list = store
+            .into_iter()
+            .map(|(labels, sub_map)| {
+                let samples: Vec<_> = sub_map
+                    .into_iter()
+                    .map(|(timestamp, acc)| Sample {
+                        timestamp,
+                        value: acc.value(),
+                    })
+                    .collect();
+
+                InstantSeries {
+                    labels: labels.labels(),
+                    samples: samples,
+                }
+            })
+            .collect();
+        self.state = SimpleAggregationIteratorState::Ready;
+        Ok(())
+    }
+
+    fn compute_labels(&self, labels: Vec<Label>) -> Result<Labels, String> {
+        // `without` removes the listed labels from the result vector,
+        // while all other labels are preserved in the output.
+        // `by` does the opposite and drops labels that are not listed in the by clause,
+        // even if their label values are identical between all elements of the vector.
+        let filtered: Vec<_> = if self.is_without {
+            labels
+                .into_iter()
+                .filter(|label| !self.labels.contains(&label.name))
+                .collect()
+        } else {
+            labels
+                .into_iter()
+                .filter(|label| self.labels.contains(&label.name))
+                .collect()
+        };
+
+        let labels = Labels::from(filtered)?;
+        Ok(labels)
+    }
+}
+
+impl InstantSeriesIterator for SimpleAggregationIterator {
+    fn next(&mut self) -> Result<Option<InstantSeries>, String> {
+        if self.state == SimpleAggregationIteratorState::Uninitialized {
+            self.drain_and_aggregate()?;
+        }
+
+        match &self.state {
+            SimpleAggregationIteratorState::Uninitialized => unreachable!(),
+            SimpleAggregationIteratorState::Ready => match self.series_list.pop() {
+                Some(series) => Ok(Some(series)),
+                None => {
+                    self.state = SimpleAggregationIteratorState::Done;
+                    Ok(None)
+                }
+            },
+            SimpleAggregationIteratorState::Done => Ok(None),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeSeries {
+    pub labels: Vec<Label>,
+    pub samples: Vec<RangeSample>,
+}
+
+impl RangeSeries {
+    pub fn new(labels: Vec<Label>, samples: Vec<RangeSample>) -> Self {
+        Self { labels, samples }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeSample {
+    pub range: TimeRange,
+    pub samples: Vec<Sample>,
+}
+
+impl RangeSample {
+    pub fn new(range: TimeRange, samples: Vec<Sample>) -> Self {
+        Self { range, samples }
+    }
+}
+
+pub trait RangeSeriesIterator {
     fn next(&mut self) -> Result<Option<RangeSeries>, String>;
+}
+
+struct HeadRangeSeriesIterator {
+    head: Arc<Head>,
+    duration: Duration,
+    matchers: Vec<LabelMatcher>,
+    // range: TimeRange,
+    query_points: VecDeque<i64>,
+    series_list: Vec<RangeSeries>,
+    is_ready: bool,
+}
+
+impl HeadRangeSeriesIterator {
+    pub fn new(
+        matchers: Vec<LabelMatcher>,
+        head: Arc<Head>,
+        duration: Duration,
+        query_points: Vec<i64>,
+    ) -> Self {
+        let query_points = VecDeque::from(query_points);
+        Self {
+            head,
+            duration,
+            matchers,
+            query_points,
+            series_list: vec![],
+            is_ready: false,
+        }
+    }
+
+    fn load_data(&mut self) {
+        if self.is_ready {
+            panic!("double call load_data")
+        }
+
+        let mut store: HashMap<Vec<Label>, Vec<RangeSample>> = HashMap::new();
+        loop {
+            if let Some(end) = self.query_points.pop_front() {
+                let start = if end > self.duration.as_secs() as i64 {
+                    end - self.duration.as_secs() as i64
+                } else {
+                    0
+                };
+                let range = TimeRange {
+                    start: TimestampSecond(start),
+                    end: TimestampSecond(end),
+                };
+                let res = self.head.query_range(&self.matchers, range.clone());
+
+                for series in res.into_iter() {
+                    let sample = RangeSample {
+                        range: range.clone(),
+                        samples: series.samples,
+                    };
+                    if let Some(entry) = store.get_mut(&series.labels) {
+                        entry.push(sample);
+                    } else {
+                        store.insert(series.labels, vec![sample]);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.series_list = store
+            .into_iter()
+            .map(|(labels, samples)| RangeSeries { labels, samples })
+            .collect();
+    }
+}
+
+impl RangeSeriesIterator for HeadRangeSeriesIterator {
+    fn next(&mut self) -> Result<Option<RangeSeries>, String> {
+        if !self.is_ready {
+            self.load_data();
+        }
+
+        if let Some(series) = self.series_list.pop() {
+            Ok(Some(series))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -458,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn test_instant_selector_iterator() {
+    fn test_head_instant_selector_iterator() {
         let h = Arc::new(Head::new(8));
         (0..10).for_each(|i: i32| {
             vec!["foo", "bar"].iter().for_each(|service| {
@@ -477,30 +851,133 @@ mod tests {
                 h.append(series_key, sample).unwrap();
             });
         });
+        let matchers = vec![
+            LabelMatcher::new(
+                crate::ast::LabelMatcherOperator::Equal,
+                "__name__".to_string(),
+                "dummy_counter".to_string(),
+            ),
+            LabelMatcher::new(
+                crate::ast::LabelMatcherOperator::Equal,
+                "service".to_string(),
+                "bar".to_string(),
+            ),
+        ];
+        let query_points = vec![1, 4, 7];
 
-        // InstantSelectorIterator::new(query_series, query_points)
+        let mut iter =
+            HeadInstantSeriesIterator::new(matchers, Arc::clone(&h), query_points.clone());
 
-        // TODO
-        // let num: f64 = 1.23;
-        // let query_points = vec![1, 10, 20, 30];
-        // let mut iter = NumberIterator::new(query_points.clone(), num);
+        let series = iter.next().unwrap().unwrap();
+        let expected_labels = vec![
+            Label::new("__name__".to_string(), "dummy_counter".to_string()),
+            Label::new("service".to_string(), "bar".to_string()),
+        ];
+        assert_eq!(series.labels, expected_labels);
+        let expected_samples: Vec<Sample> = query_points
+            .iter()
+            .map(|ts| Sample {
+                timestamp: TimestampSecond(ts.clone()),
+                value: ts.clone() as f64,
+            })
+            .collect();
+        assert_eq!(series.samples, expected_samples);
+    }
 
-        // let expected_samples: Vec<Sample> = query_points
-        //     .iter()
-        //     .map(|ts| Sample {
-        //         timestamp: TimestampMillis(ts.clone()),
-        //         value: num.clone(),
-        //     })
-        //     .collect();
+    #[test]
+    fn test_head_range_selector_iterator() {
+        let h = Arc::new(Head::new(8));
+        (0..10).for_each(|i: i32| {
+            vec!["foo", "bar"].iter().for_each(|service| {
+                let labels = vec![
+                    Label::new(format!("__name__"), format!("dummy_counter")),
+                    Label::new(format!("service"), service.to_string()),
+                ];
 
-        // let series = iter.next().unwrap().unwrap();
-        // if let Some(_) = iter.next().unwrap() {
-        //     assert!(false, "it should only return one series");
-        // }
-        // assert_eq!(series.labels.len(), 0);
-        // for (index, expected_sample) in expected_samples.iter().enumerate() {
-        //     let sample = series.samples[index];
-        //     assert_eq!(&sample, expected_sample);
-        // }
+                let series_key = SeriesKey::from(labels).unwrap();
+
+                let sample = Sample {
+                    timestamp: TimestampSecond(i64::from(100 + i)),
+                    value: f64::from(i),
+                };
+
+                h.append(series_key, sample).unwrap();
+            });
+        });
+        let matchers = vec![
+            LabelMatcher::new(
+                crate::ast::LabelMatcherOperator::Equal,
+                "__name__".to_string(),
+                "dummy_counter".to_string(),
+            ),
+            LabelMatcher::new(
+                crate::ast::LabelMatcherOperator::Equal,
+                "service".to_string(),
+                "bar".to_string(),
+            ),
+        ];
+        let query_points = vec![102, 105];
+        let duration = Duration::from_secs(5);
+
+        let mut iter =
+            HeadRangeSeriesIterator::new(matchers, Arc::clone(&h), duration, query_points);
+
+        let series = iter.next().unwrap().unwrap();
+        let expected_labels = vec![
+            Label::new("__name__".to_string(), "dummy_counter".to_string()),
+            Label::new("service".to_string(), "bar".to_string()),
+        ];
+        assert_eq!(series.labels, expected_labels);
+        let expected_samples = vec![
+            RangeSample {
+                range: TimeRange {
+                    start: TimestampSecond(97),
+                    end: TimestampSecond(102),
+                },
+                samples: vec![
+                    Sample {
+                        timestamp: TimestampSecond(100),
+                        value: 0.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(101),
+                        value: 1.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(102),
+                        value: 2.0,
+                    },
+                ],
+            },
+            RangeSample {
+                range: TimeRange {
+                    start: TimestampSecond(100),
+                    end: TimestampSecond(105),
+                },
+                samples: vec![
+                    Sample {
+                        timestamp: TimestampSecond(101),
+                        value: 1.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(102),
+                        value: 2.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(103),
+                        value: 3.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(104),
+                        value: 4.0,
+                    },
+                    Sample {
+                        timestamp: TimestampSecond(105),
+                        value: 5.0,
+                    },
+                ],
+            },
+        ];
+        assert_eq!(series.samples, expected_samples);
     }
 }

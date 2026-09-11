@@ -10,6 +10,7 @@ pub enum Expression {
     TimeSeries(TimeSeries),
     BinaryExpression(BinaryExpression),
     CallExpression(CallExpression),
+    AggregationExpression(AggregationExpression),
 }
 
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -230,3 +231,82 @@ impl CallExpression {
         Self { name, arguments }
     }
 }
+
+#[derive(PartialEq, Debug, Clone, Eq)]
+pub enum SimpleAggregationOperator {
+    Sum,
+    Avg,
+    Min,
+    Max,
+    Group,
+    Count,
+    Stddev,
+    Stdvar,
+}
+
+#[derive(PartialEq, Debug, Clone, Eq)]
+pub enum AggregationExpression {
+    Simple(SimpleAggregationExpression),
+    K(KAggregationExpression),
+}
+
+#[derive(PartialEq, Debug, Clone, Eq)]
+pub struct SimpleAggregationExpression {
+    pub op: SimpleAggregationOperator,
+    pub exp: Box<Expression>,
+    pub labels: Vec<String>,
+    pub is_without: bool,
+}
+
+impl SimpleAggregationExpression {
+    pub fn new(
+        op: SimpleAggregationOperator,
+        exp: Box<Expression>,
+        labels: Vec<String>,
+        is_without: bool,
+    ) -> Self {
+        Self {
+            op,
+            exp,
+            labels,
+            is_without,
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone, Eq)]
+pub enum KAggregationOperator {
+    BottomK,
+    TopK,
+    LimitK,
+    LimitRatio,
+}
+
+#[derive(PartialEq, Debug, Clone, Eq)]
+pub struct KAggregationExpression {
+    pub op: KAggregationOperator,
+    pub exp: Box<Expression>,
+    pub labels: Vec<String>,
+    pub is_without: bool,
+}
+
+impl KAggregationExpression {
+    pub fn new(
+        op: KAggregationOperator,
+        exp: Box<Expression>,
+        labels: Vec<String>,
+        is_without: bool,
+    ) -> Self {
+        Self {
+            op,
+            exp,
+            labels,
+            is_without,
+        }
+    }
+}
+
+// TODO
+// LimitRatio,
+// CountValues,
+// Quantile,

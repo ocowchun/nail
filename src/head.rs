@@ -7,6 +7,8 @@ use std::{
     sync::{Arc, RwLock, atomic::AtomicU64},
 };
 
+use hyper_util::client::proxy::matcher;
+
 use crate::{
     ast::{LabelMatcher, LabelMatcherOperator},
     core::Label,
@@ -51,9 +53,16 @@ struct Series {
     samples: Vec<Sample>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeRange {
     pub start: TimestampSecond,
     pub end: TimestampSecond,
+}
+
+impl TimeRange {
+    pub fn new(start: TimestampSecond, end: TimestampSecond) -> Self {
+        Self { start, end }
+    }
 }
 
 impl Series {
@@ -77,25 +86,18 @@ impl Series {
         Ok(())
     }
 
-    fn query_range(&self, range: &TimeRange) -> &[Sample] {
-        // 5 min
-        let loopback_period = 5 * 3600;
-        let start_range = if range.start.0 >= loopback_period {
-            TimestampSecond(range.start.0 - loopback_period)
-        } else {
-            range.start
-        };
-
+    fn query_samples(&self, range: &TimeRange) -> &[Sample] {
+        // Returns samples in the left-open, right-closed interval `(start, end]`.
         let start = self
             .samples
-            .partition_point(|sample| sample.timestamp < start_range);
+            .partition_point(|sample| sample.timestamp <= range.start);
         let end = self
             .samples
             .partition_point(|sample| sample.timestamp <= range.end);
-        println!(
-            "query_range range_start: {} - {} {start} .. {end}",
-            range.start.0, range.end.0,
-        );
+        // println!(
+        //     "query_range range_start: {} - {} {start} .. {end}",
+        //     range.start.0, range.end.0,
+        // );
         &self.samples[start..end]
     }
 }
@@ -255,13 +257,13 @@ impl Head {
                     .get(&series_id)
                     .expect("series indexes are inconsistent");
 
-                let samples = series.query_range(&range).to_vec();
+                let samples = series.query_samples(&range).to_vec();
                 if !samples.is_empty() {
                     println!("head.query_range, push series");
                     result.push(QuerySeries {
                         id: series.id,
                         labels: series.key.labels.clone(),
-                        samples: series.query_range(&range).to_vec(),
+                        samples: samples,
                     });
                 }
             }

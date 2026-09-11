@@ -43,6 +43,22 @@ pub enum TokenType {
     Unless,
     Offset,
     Tilde,
+    Sum,
+    Avg,
+    Min,
+    Max,
+    BottomK,
+    TopK,
+    LimitK,
+    LimitRatio,
+    Group,
+    Count,
+    CountValues,
+    Stddev,
+    Stdvar,
+    Quantile,
+    Without,
+    By,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -231,11 +247,27 @@ impl Lexer {
                 _ => {
                     if Self::is_valid_letter(c) {
                         let lit = self.read_identifier()?;
-                        let t = match lit.as_str() {
+                        let t = match lit.to_lowercase().as_str() {
                             "and" => Token::new(TokenType::And, lit),
                             "or" => Token::new(TokenType::Or, lit),
                             "unless" => Token::new(TokenType::Unless, lit),
                             "offset" => Token::new(TokenType::Offset, lit),
+                            "sum" => Token::new(TokenType::Sum, lit),
+                            "avg" => Token::new(TokenType::Avg, lit),
+                            "min" => Token::new(TokenType::Min, lit),
+                            "max" => Token::new(TokenType::Max, lit),
+                            "bottomk" => Token::new(TokenType::BottomK, lit),
+                            "topk" => Token::new(TokenType::TopK, lit),
+                            "limitk" => Token::new(TokenType::LimitK, lit),
+                            "limit_ratio" => Token::new(TokenType::LimitRatio, lit),
+                            "group" => Token::new(TokenType::Group, lit),
+                            "count" => Token::new(TokenType::Count, lit),
+                            "count_values" => Token::new(TokenType::CountValues, lit),
+                            "stddev" => Token::new(TokenType::Stddev, lit),
+                            "stdvar" => Token::new(TokenType::Stdvar, lit),
+                            "quantile" => Token::new(TokenType::Quantile, lit),
+                            "by" => Token::new(TokenType::By, lit),
+                            "without" => Token::new(TokenType::Without, lit),
                             _ => Token::new(TokenType::Identifier, lit),
                         };
                         Ok(t)

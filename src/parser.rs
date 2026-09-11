@@ -1,12 +1,16 @@
 use std::mem;
 
+use crate::ast::AggregationExpression::Simple;
 use crate::ast::BinaryExpression;
 use crate::ast::BinaryOperator;
 use crate::ast::CallExpression;
 use crate::ast::Expression;
+use crate::ast::Expression::AggregationExpression;
 use crate::ast::FloatLiteral;
 use crate::ast::LabelMatcher;
 use crate::ast::LabelMatcherOperator;
+use crate::ast::SimpleAggregationExpression;
+use crate::ast::SimpleAggregationOperator;
 use crate::ast::TimeDuration;
 use crate::ast::TimeSeries;
 use crate::lexer::Lexer;
@@ -14,6 +18,7 @@ use crate::lexer::Lexer;
 use crate::lexer::Token;
 use crate::lexer::TokenType;
 use crate::lexer::TokenType::LeftBrace;
+use crate::lexer::TokenType::LeftParenthesis;
 use crate::lexer::TokenType::TimeDurationLiteral;
 
 pub struct Parser {
@@ -75,7 +80,135 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Result<Expression, String> {
-        self.parse_or()
+        if Self::is_aggregation_operator_token(&self.current_token) {
+            self.parse_aggregation()
+        } else {
+            self.parse_or()
+        }
+    }
+
+    fn is_aggregation_operator_token(token: &Token) -> bool {
+        vec![
+            TokenType::Sum,
+            TokenType::Avg,
+            TokenType::Min,
+            TokenType::Max,
+            TokenType::BottomK,
+            TokenType::TopK,
+            TokenType::LimitK,
+            TokenType::LimitRatio,
+            TokenType::Group,
+            TokenType::Count,
+            TokenType::CountValues,
+            TokenType::Stddev,
+            TokenType::Stdvar,
+            TokenType::Quantile,
+        ]
+        .contains(&token.token_type)
+    }
+
+    fn parse_aggregation(&mut self) -> Result<Expression, String> {
+        let aggregation_operator_token = self.next_token().unwrap();
+        match aggregation_operator_token.token_type {
+            TokenType::Sum
+            | TokenType::Avg
+            | TokenType::Min
+            | TokenType::Max
+            | TokenType::Group
+            | TokenType::Count
+            | TokenType::Stddev
+            | TokenType::Stdvar => {
+                self.parse_simple_aggregation(aggregation_operator_token.token_type)
+            }
+            _ => return Err("not implement yet".to_string()),
+        }
+    }
+
+    fn parse_simple_aggregation(&mut self, token_type: TokenType) -> Result<Expression, String> {
+        let op = match token_type {
+            TokenType::Sum => SimpleAggregationOperator::Sum,
+            TokenType::Avg => SimpleAggregationOperator::Avg,
+            TokenType::Min => SimpleAggregationOperator::Min,
+            TokenType::Max => SimpleAggregationOperator::Max,
+            TokenType::Group => SimpleAggregationOperator::Group,
+            TokenType::Count => SimpleAggregationOperator::Count,
+            TokenType::Stddev => SimpleAggregationOperator::Stddev,
+            TokenType::Stdvar => SimpleAggregationOperator::Stdvar,
+            _ => return Err("invalid aggregation operator".to_string()),
+        };
+
+        let mut is_without = false;
+        let mut labels =
+            if vec![TokenType::By, TokenType::Without].contains(&self.current_token.token_type) {
+                is_without = self.current_token.is(TokenType::Without);
+                self.next_token();
+                self.parse_label_list()?
+            } else {
+                vec![]
+            };
+
+        if !self.current_token.is(TokenType::LeftParenthesis) {
+            return Err(format!(
+                "expected `(` when parsing aggregation expression got {}",
+                self.current_token.literal
+            ));
+        }
+        self.next_token();
+
+        let exp = self.parse()?;
+
+        if !self.current_token.is(TokenType::RightParenthesis) {
+            return Err(format!(
+                "expected `)` when parsing aggregation expression got {}",
+                self.current_token.literal
+            ));
+        }
+        self.next_token();
+
+        if vec![TokenType::By, TokenType::Without].contains(&self.current_token.token_type) {
+            if !labels.is_empty() {
+                return Err("double without/by clause".to_string());
+            }
+            is_without = self.current_token.is(TokenType::Without);
+            self.next_token();
+            labels = self.parse_label_list()?;
+        }
+
+        let exp = SimpleAggregationExpression::new(op, Box::new(exp), labels, is_without);
+        Ok(AggregationExpression(Simple(exp)))
+    }
+
+    fn parse_label_list(&mut self) -> Result<Vec<String>, String> {
+        let mut labels = vec![];
+        if !self.current_token.is(TokenType::LeftParenthesis) {
+            return Err(format!(
+                "expected `(` when parsing aggregation expression got {}",
+                self.current_token.literal
+            ));
+        }
+        self.next_token();
+
+        while !self.current_token.is(TokenType::RightParenthesis) {
+            if !self.current_token.is(TokenType::Identifier) {
+                return Err(format!(
+                    "expected identifier when parsing aggregation expression got {}",
+                    self.current_token.literal
+                ));
+            }
+
+            let token = self.next_token().unwrap();
+            labels.push(token.literal);
+            if self.current_token.is(TokenType::Comma) {
+                self.next_token();
+            }
+        }
+        self.next_token();
+
+        if labels.is_empty() {
+            return Err(format!("it must contains at least one label"));
+        }
+
+        Ok(labels)
     }
 
     fn parse_or(&mut self) -> Result<Expression, String> {
@@ -566,6 +699,55 @@ mod tests {
                 ))),
             ));
 
+            assert_eq!(exp, expected_exp);
+        });
+    }
+
+    #[test]
+    fn parse_aggregation_operators() {
+        let operators = vec![
+            ("sum", SimpleAggregationOperator::Sum),
+            ("avg", SimpleAggregationOperator::Avg),
+        ];
+        operators.iter().for_each(|(op_str, op)| {
+            let query = format!("{op_str}(memory_consumption_bytes)");
+            let lexer = Lexer::new(query);
+            let mut parser = Parser::new(lexer);
+
+            let exp = parser.parse().unwrap();
+
+            let expected_exp =
+                Expression::AggregationExpression(Simple(SimpleAggregationExpression::new(
+                    op.clone(),
+                    Box::new(Expression::TimeSeries(TimeSeries::new(
+                        "memory_consumption_bytes".to_string(),
+                        vec![],
+                        None,
+                        None,
+                    ))),
+                    vec![],
+                    false,
+                )));
+            assert_eq!(exp, expected_exp);
+
+            let query = format!("{op_str} by (application) (memory_consumption_bytes)");
+            let lexer = Lexer::new(query);
+            let mut parser = Parser::new(lexer);
+
+            let exp = parser.parse().unwrap();
+
+            let expected_exp =
+                Expression::AggregationExpression(Simple(SimpleAggregationExpression::new(
+                    op.clone(),
+                    Box::new(Expression::TimeSeries(TimeSeries::new(
+                        "memory_consumption_bytes".to_string(),
+                        vec![],
+                        None,
+                        None,
+                    ))),
+                    vec!["application".to_string()],
+                    false,
+                )));
             assert_eq!(exp, expected_exp);
         });
     }
