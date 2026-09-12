@@ -366,8 +366,16 @@ impl Parser {
 
     fn finish_call(&mut self, callee: String) -> Result<Expression, String> {
         let mut arguments = vec![];
+        println!("finish_call, current_token: {:?}", self.current_token);
 
         while !self.current_token.is(TokenType::RightParenthesis) {
+            println!(
+                "arguments.len -> {}, curren_token is {:?}, peek_token is {:?}",
+                arguments.len(),
+                self.current_token,
+                self.peek_token,
+            );
+
             if !arguments.is_empty() {
                 if !self.current_token.is(TokenType::Comma) {
                     return Err(format!(
@@ -376,9 +384,18 @@ impl Parser {
                     ));
                 }
                 self.next_token();
+                println!(
+                    "finish_call after_next_token, current_token is {:?}",
+                    self.current_token
+                );
             }
 
+            println!(
+                "finish_call parse_comparision, current_token is {:?}",
+                self.current_token
+            );
             let arg = self.parse_comparison()?;
+            println!("yoyo arg is -> {:?}", arg);
             arguments.push(Box::new(arg));
         }
 
@@ -521,6 +538,8 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use crate::analyzer::ExpressionType;
+
     use super::*;
 
     #[test]
@@ -737,13 +756,52 @@ mod tests {
 
     #[test]
     fn parse_functions() {
-        let lexer = Lexer::new("time()".to_string());
-        let mut parser = Parser::new(lexer);
+        {
+            let lexer = Lexer::new("time()".to_string());
+            let mut parser = Parser::new(lexer);
 
-        let exp = parser.parse().unwrap();
-        let expected_exp =
-            Expression::CallExpression(CallExpression::new("time".to_string(), vec![]));
+            let exp = parser.parse().unwrap();
+            let expected_exp =
+                Expression::CallExpression(CallExpression::new("time".to_string(), vec![]));
 
-        assert_eq!(exp, expected_exp);
+            assert_eq!(exp, expected_exp);
+        }
+
+        {
+            let lexer = Lexer::new("vector(5)".to_string());
+            let mut parser = Parser::new(lexer);
+
+            let exp = parser.parse().unwrap();
+            let expected_exp = Expression::CallExpression(CallExpression::new(
+                "vector".to_string(),
+                vec![Box::new(Expression::FloatLiteral(FloatLiteral::new(
+                    "5".to_string(),
+                )))],
+            ));
+
+            assert_eq!(exp, expected_exp);
+        }
+
+        {
+            let lexer = Lexer::new("clamp(foo, 1, 3)".to_string());
+            let mut parser = Parser::new(lexer);
+
+            let exp = parser.parse().unwrap();
+            let expected_exp = Expression::CallExpression(CallExpression::new(
+                "clamp".to_string(),
+                vec![
+                    Box::new(Expression::TimeSeries(TimeSeries::new(
+                        "foo".to_string(),
+                        vec![],
+                        None,
+                        None,
+                    ))),
+                    Box::new(Expression::FloatLiteral(FloatLiteral::new("1".to_string()))),
+                    Box::new(Expression::FloatLiteral(FloatLiteral::new("3".to_string()))),
+                ],
+            ));
+
+            assert_eq!(exp, expected_exp);
+        }
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     analyzer::ExpressionType,
     ast::Expression,
-    head::Sample,
+    head::{Sample, TimestampSecond},
     query_exec::{InstantSeries, InstantSeriesIterator, RangeSample, RangeSeriesIterator},
 };
 
@@ -32,6 +32,52 @@ pub struct FunctionSpec {
     pub return_type: ExpressionType,
     pub eval: EvalFunction,
 }
+
+struct AbsentIterator {
+    inner: Box<dyn InstantSeriesIterator>,
+    query_points: Vec<i64>,
+    is_done: bool,
+}
+
+impl InstantSeriesIterator for AbsentIterator {
+    fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
+        if self.is_done {
+            return Ok(None);
+        }
+
+        self.is_done = true;
+        if let Some(_) = self.inner.next()? {
+            return Ok(None);
+        };
+
+        let samples = self
+            .query_points
+            .iter()
+            .map(|ts| Sample::new(TimestampSecond::new(ts.clone()), 1.0))
+            .collect();
+        let series = InstantSeries::new(vec![], samples);
+        Ok(Some(series))
+    }
+}
+
+pub fn eval_absent(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(AbsentIterator {
+        inner,
+        query_points: context.query_points.clone(),
+        is_done: false,
+    })))
+}
+
+pub static ABSENT_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "absent",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_absent,
+};
 
 pub fn eval_abs(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
     let EvalValue::Instant(inner) = args.remove(0) else {
@@ -177,12 +223,125 @@ pub static ROUND_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
     eval: eval_round,
 };
 
-struct UnaryMapIterator {
-    inner: Box<dyn InstantSeriesIterator>,
-    transform: fn(f64) -> f64,
+pub fn eval_clamp(mut args: Vec<EvalValue>, _: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+    let EvalValue::Scalar(min) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+    let EvalValue::Scalar(max) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+    if min > max {
+        let iter = SeriesListInstantIterator::new(vec![]);
+        return Ok(EvalValue::Instant(Box::new(iter)));
+    }
+
+    if min.is_nan() || max.is_nan() {
+        return Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+            inner,
+            transform: |_| f64::NAN,
+        })));
+    }
+
+    let transform = move |f| {
+        if f < min {
+            min
+        } else if f > max {
+            max
+        } else {
+            f
+        }
+    };
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform,
+    })))
 }
 
-impl InstantSeriesIterator for UnaryMapIterator {
+pub static CLAMP_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "clamp",
+    arg_types: &[
+        ExpressionType::InstantVector,
+        ExpressionType::Scalar,
+        ExpressionType::Scalar,
+    ],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_clamp,
+};
+
+pub fn eval_clamp_max(mut args: Vec<EvalValue>, _: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+    let EvalValue::Scalar(max) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    if max.is_nan() {
+        return Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+            inner,
+            transform: |_| f64::NAN,
+        })));
+    }
+
+    let transform = move |f| {
+        if f > max { max } else { f }
+    };
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform,
+    })))
+}
+
+pub static CLAMP_MAX_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "clamp_max",
+    arg_types: &[ExpressionType::InstantVector, ExpressionType::Scalar],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_clamp_max,
+};
+
+pub fn eval_clamp_min(mut args: Vec<EvalValue>, _: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+    let EvalValue::Scalar(min) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    if min.is_nan() {
+        return Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+            inner,
+            transform: |_| f64::NAN,
+        })));
+    }
+
+    let transform = move |f| {
+        if f < min { min } else { f }
+    };
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform,
+    })))
+}
+
+pub static CLAMP_MIN_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "clamp_min",
+    arg_types: &[ExpressionType::InstantVector, ExpressionType::Scalar],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_clamp_min,
+};
+
+struct UnaryMapIterator<F> {
+    inner: Box<dyn InstantSeriesIterator>,
+    transform: F,
+}
+
+impl<F> InstantSeriesIterator for UnaryMapIterator<F>
+where
+    F: Fn(f64) -> f64,
+{
     fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
         let Some(mut series) = self.inner.next()? else {
             return Ok(None);
@@ -234,6 +393,29 @@ pub static TIME_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
     arg_types: &[],
     return_type: ExpressionType::InstantVector,
     eval: eval_time,
+};
+
+pub fn eval_vector(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Scalar(num) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    let samples = context
+        .query_points
+        .into_iter()
+        .map(|v| Sample::new(crate::head::TimestampSecond(v), num))
+        .collect();
+
+    let series = InstantSeries::new(vec![], samples);
+    let iter = SeriesListInstantIterator::new(vec![series]);
+    Ok(EvalValue::Instant(Box::new(iter)))
+}
+
+pub static VECTOR_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "vector",
+    arg_types: &[ExpressionType::Scalar],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_vector,
 };
 
 pub fn eval_rate(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {

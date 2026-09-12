@@ -374,15 +374,16 @@ impl Lexer {
                             TokenType::TimeDurationLiteral,
                             format!("{first}{timeunit}"),
                         ));
-                    } else if Self::is_digit(c) {
+                    } else if c == ')' || c == ',' || Self::is_space(c) {
+                        // support case like vector(5)
+                        // do nothing
+                    } else {
                         return Err(format!(
                             "unexpected char `{c}` when trying to parse timeduration"
                         ));
                     }
                 }
             }
-
-            todo!()
         }
         return Ok(Token::new(TokenType::IntegerLiteral, first));
     }
@@ -531,6 +532,26 @@ mod tests {
             Token::new(TokenType::LeftBracket, "[".to_string()),
             Token::new(TokenType::TimeDurationLiteral, "5m".to_string()),
             Token::new(TokenType::RightBracket, "]".to_string()),
+        ];
+
+        for expected_token in expected_tokens {
+            let t = lexer.next_token().unwrap();
+            assert_eq!(t, expected_token);
+        }
+    }
+
+    #[test]
+    fn parse_clamp_function() {
+        let mut lexer = Lexer::new("clamp(foo, 10, 20)".to_string());
+        let expected_tokens = vec![
+            Token::new(TokenType::Identifier, "clamp".to_string()),
+            Token::new(TokenType::LeftParenthesis, "(".to_string()),
+            Token::new(TokenType::Identifier, "foo".to_string()),
+            Token::new(TokenType::Comma, ",".to_string()),
+            Token::new(TokenType::IntegerLiteral, "10".to_string()),
+            Token::new(TokenType::Comma, ",".to_string()),
+            Token::new(TokenType::IntegerLiteral, "20".to_string()),
+            Token::new(TokenType::RightParenthesis, ")".to_string()),
         ];
 
         for expected_token in expected_tokens {

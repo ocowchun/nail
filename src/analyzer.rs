@@ -10,9 +10,11 @@ use crate::{
         LabelMatcherOperator, SimpleAggregationExpression, SimpleAggregationOperator, TimeSeries,
     },
     function::{
-        ABS_FUNCTION_SPEC, CEIL_FUNCTION_SPEC, EvalValue, FLOOR_FUNCTION_SPEC, FunctionSpec,
-        LN_FUNCTION_SPEC, LOG2_FUNCTION_SPEC, LOG10_FUNCTION_SPEC, RATE_FUNCTION_SPEC,
-        ROUND_FUNCTION_SPEC, SQRT_FUNCTION_SPEC, TIME_FUNCTION_SPEC,
+        ABS_FUNCTION_SPEC, ABSENT_FUNCTION_SPEC, CEIL_FUNCTION_SPEC, CLAMP_FUNCTION_SPEC,
+        CLAMP_MAX_FUNCTION_SPEC, CLAMP_MIN_FUNCTION_SPEC, EvalValue, FLOOR_FUNCTION_SPEC,
+        FunctionSpec, LN_FUNCTION_SPEC, LOG2_FUNCTION_SPEC, LOG10_FUNCTION_SPEC,
+        RATE_FUNCTION_SPEC, ROUND_FUNCTION_SPEC, SQRT_FUNCTION_SPEC, TIME_FUNCTION_SPEC,
+        VECTOR_FUNCTION_SPEC,
     },
 };
 
@@ -274,7 +276,11 @@ impl Analyzer {
 
         let spec = match expression.name.as_ref() {
             "abs" => &ABS_FUNCTION_SPEC,
+            "absent" => &ABSENT_FUNCTION_SPEC,
             "ceil" => &CEIL_FUNCTION_SPEC,
+            "clamp" => &CLAMP_FUNCTION_SPEC,
+            "clamp_max" => &CLAMP_MAX_FUNCTION_SPEC,
+            "clamp_min" => &CLAMP_MIN_FUNCTION_SPEC,
             "floor" => &FLOOR_FUNCTION_SPEC,
             "ln" => &LN_FUNCTION_SPEC,
             "log2" => &LOG2_FUNCTION_SPEC,
@@ -283,6 +289,7 @@ impl Analyzer {
             "round" => &ROUND_FUNCTION_SPEC,
             "sqrt" => &SQRT_FUNCTION_SPEC,
             "time" => &TIME_FUNCTION_SPEC,
+            "vector" => &VECTOR_FUNCTION_SPEC,
             _ => {
                 return Err(format!(
                     "unknown function with name \"{}\"",

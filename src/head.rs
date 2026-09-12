@@ -14,6 +14,11 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimestampSecond(pub i64);
+impl TimestampSecond {
+    pub fn new(v: i64) -> Self {
+        Self(v)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sample {
