@@ -9,7 +9,11 @@ use crate::{
         BinaryExpression, BinaryOperator, CallExpression, Expression, LabelMatcher,
         LabelMatcherOperator, SimpleAggregationExpression, SimpleAggregationOperator, TimeSeries,
     },
-    function::{ABS_FUNCTION_SPEC, EvalValue, FunctionSpec, RATE_FUNCTION_SPEC},
+    function::{
+        ABS_FUNCTION_SPEC, CEIL_FUNCTION_SPEC, EvalValue, FLOOR_FUNCTION_SPEC, FunctionSpec,
+        LN_FUNCTION_SPEC, LOG2_FUNCTION_SPEC, LOG10_FUNCTION_SPEC, RATE_FUNCTION_SPEC,
+        ROUND_FUNCTION_SPEC, SQRT_FUNCTION_SPEC, TIME_FUNCTION_SPEC,
+    },
 };
 
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -92,7 +96,7 @@ impl RangeSelector {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Call {
     pub spec: &'static FunctionSpec,
     pub args: Vec<Plan>,
@@ -102,6 +106,12 @@ pub struct Call {
 impl Call {
     pub fn new(spec: &'static FunctionSpec, args: Vec<Plan>) -> Self {
         Self { spec, args }
+    }
+}
+
+impl PartialEq for Call {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec.name == other.spec.name && self.args == other.args
     }
 }
 
@@ -264,14 +274,26 @@ impl Analyzer {
 
         let spec = match expression.name.as_ref() {
             "abs" => &ABS_FUNCTION_SPEC,
+            "ceil" => &CEIL_FUNCTION_SPEC,
+            "floor" => &FLOOR_FUNCTION_SPEC,
+            "ln" => &LN_FUNCTION_SPEC,
+            "log2" => &LOG2_FUNCTION_SPEC,
+            "log10" => &LOG10_FUNCTION_SPEC,
             "rate" => &RATE_FUNCTION_SPEC,
+            "round" => &ROUND_FUNCTION_SPEC,
+            "sqrt" => &SQRT_FUNCTION_SPEC,
+            "time" => &TIME_FUNCTION_SPEC,
             _ => {
-                return Err(format!("unsupported function {}", expression.name));
+                return Err(format!(
+                    "unknown function with name \"{}\"",
+                    expression.name
+                ));
             }
         };
         if args.len() != spec.arg_types.len() {
             return Err(format!(
-                "{} required {} argument",
+                "expected {} argument(s) in call to \"{}\", got {}",
+                spec.arg_types.len(),
                 spec.name,
                 spec.arg_types.len()
             ));
@@ -286,28 +308,8 @@ impl Analyzer {
             }
         }
 
-        // TODO: refactor it later to support multiple functions
-        // if expression.name == "abs" {
-        //     if expression.arguments.len() != 1 {
-        //         return Err(format!("abs required 1 argument"));
-        //     }
-
-        //     let exp = expression.arguments.first().unwrap();
-        //     let arg = self.analyze(exp)?;
-        //     if arg.return_type() != ExpressionType::InstantVector {
-        //         return Err(format!("argument must be instant-vector"));
-        //     }
-
-        //     let plan = Call::new(
-        //         expression.name.to_string(),
-        //         vec![arg],
-        //         ExpressionType::InstantVector,
-        //     );
-        //     return Ok(Plan::Call(plan));
-        // } else {
-        //     return Err(format!("unsupported function {}", expression.name));
-        // }
-        todo!()
+        let call = Call::new(spec, args);
+        Ok(Plan::Call(call))
     }
 
     fn analyze_aggregation_expression(

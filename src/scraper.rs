@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn parse_metric() {
-        let mut text = vec![
+        let text = vec![
             "# TYPE go_gc_cleanups_executed_cleanups_total counter",
             "go_gc_cleanups_executed_cleanups_total 0",
             "# TYPE prometheus_sd_kubernetes_events_total counter",

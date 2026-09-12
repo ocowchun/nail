@@ -493,17 +493,4 @@ mod tests {
 
         assert_eq!(res.len(), 2);
     }
-
-    #[test]
-    fn test_threads() {
-        let a = Cell::new(5);
-        let b = RefCell::new(5);
-
-        {
-            a.set(6);
-        }
-        {
-            b.borrow_mut().add(3);
-        }
-    }
 }

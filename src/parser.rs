@@ -364,24 +364,6 @@ impl Parser {
         Ok(left)
     }
 
-    // fn parse_call(&mut self) -> Result<Expression, String> {
-    //     let exp = self.parse_primary()?;
-
-    //     if self.current_token.is(TokenType::LeftParenthesis) {
-    //         if let Expression::Identifier(callee) = exp {
-    //             self.next_token();
-    //             return self.finish_call(callee);
-    //         } else {
-    //             return Err(format!(
-    //                 "expected identifier before `(` but got {}",
-    //                 self.current_token.literal
-    //             ));
-    //         }
-    //     }
-
-    //     Ok(exp)
-    // }
-
     fn finish_call(&mut self, callee: String) -> Result<Expression, String> {
         let mut arguments = vec![];
 
@@ -436,6 +418,7 @@ impl Parser {
         if self.current_token.is(TokenType::Identifier) {
             if self.peek_token.is(TokenType::LeftParenthesis) {
                 let token = self.next_token().unwrap();
+                self.next_token();
                 return self.finish_call(token.literal);
             }
             return self.parse_timeseries();
@@ -750,5 +733,17 @@ mod tests {
                 )));
             assert_eq!(exp, expected_exp);
         });
+    }
+
+    #[test]
+    fn parse_functions() {
+        let lexer = Lexer::new("time()".to_string());
+        let mut parser = Parser::new(lexer);
+
+        let exp = parser.parse().unwrap();
+        let expected_exp =
+            Expression::CallExpression(CallExpression::new("time".to_string(), vec![]));
+
+        assert_eq!(exp, expected_exp);
     }
 }

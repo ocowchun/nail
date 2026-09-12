@@ -12,7 +12,7 @@ use crate::{
     },
     ast::{BinaryOperator, LabelMatcher, SimpleAggregationOperator},
     core::{Label, Labels},
-    function::EvalValue,
+    function::{EvalValue, QueryContext},
     head::{Head, QuerySeries, Sample, TimeRange, TimestampSecond},
     lexer::Lexer,
     parser::Parser,
@@ -192,7 +192,8 @@ impl QueryExec {
             };
             args.push(arg);
         }
-        let res = (call.spec.eval)(args)?;
+        let context = QueryContext::new(query_points.clone());
+        let res = (call.spec.eval)(args, context)?;
 
         return match res {
             EvalValue::Instant(iter) => Ok(iter),

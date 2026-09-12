@@ -12,9 +12,20 @@ pub enum EvalValue {
     String(String),
 }
 
-pub type EvalFunction = fn(args: Vec<EvalValue>) -> Result<EvalValue, String>;
+pub struct QueryContext {
+    pub query_points: Vec<i64>,
+}
 
-#[derive(PartialEq, Debug, Clone)]
+impl QueryContext {
+    pub fn new(query_points: Vec<i64>) -> Self {
+        Self { query_points }
+    }
+}
+
+pub type EvalFunction =
+    fn(args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String>;
+
+#[derive(Debug, Clone)]
 pub struct FunctionSpec {
     pub name: &'static str,
     pub arg_types: &'static [ExpressionType],
@@ -22,7 +33,7 @@ pub struct FunctionSpec {
     pub eval: EvalFunction,
 }
 
-pub fn eval_abs(mut args: Vec<EvalValue>) -> Result<EvalValue, String> {
+pub fn eval_abs(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
     let EvalValue::Instant(inner) = args.remove(0) else {
         unreachable!("validated by analyzer");
     };
@@ -32,6 +43,139 @@ pub fn eval_abs(mut args: Vec<EvalValue>) -> Result<EvalValue, String> {
         transform: f64::abs,
     })))
 }
+
+pub static ABS_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "abs",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_abs,
+};
+
+pub fn eval_ceil(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::ceil,
+    })))
+}
+
+pub static CEIL_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "ceil",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_ceil,
+};
+
+pub fn eval_floor(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::floor,
+    })))
+}
+
+pub static FLOOR_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "floor",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_floor,
+};
+
+pub fn eval_ln(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::ln,
+    })))
+}
+
+pub static LN_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "ln",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_ln,
+};
+
+pub fn eval_log2(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::log2,
+    })))
+}
+
+pub static LOG2_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "log2",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_log2,
+};
+
+pub fn eval_log10(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::log10,
+    })))
+}
+
+pub static LOG10_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "log10",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_log10,
+};
+
+pub fn eval_sqrt(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::sqrt,
+    })))
+}
+
+pub static SQRT_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "sqrt",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_sqrt,
+};
+
+pub fn eval_round(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Instant(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    Ok(EvalValue::Instant(Box::new(UnaryMapIterator {
+        inner,
+        transform: f64::round,
+    })))
+}
+
+pub static ROUND_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "round",
+    arg_types: &[ExpressionType::InstantVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_round,
+};
 
 struct UnaryMapIterator {
     inner: Box<dyn InstantSeriesIterator>,
@@ -51,14 +195,48 @@ impl InstantSeriesIterator for UnaryMapIterator {
     }
 }
 
-pub static ABS_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
-    name: "abs",
-    arg_types: &[ExpressionType::InstantVector],
+struct SeriesListInstantIterator {
+    series_list: Vec<InstantSeries>,
+}
+
+impl SeriesListInstantIterator {
+    pub fn new(series_list: Vec<InstantSeries>) -> Self {
+        Self { series_list }
+    }
+}
+
+impl InstantSeriesIterator for SeriesListInstantIterator {
+    fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
+        if let Some(series) = self.series_list.pop() {
+            return Ok(Some(series));
+        }
+        return Ok(None);
+    }
+}
+
+pub fn eval_time(args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
+    if args.len() != 0 {
+        unreachable!("validated by analyzer");
+    }
+    let samples = context
+        .query_points
+        .into_iter()
+        .map(|v| Sample::new(crate::head::TimestampSecond(v), v as f64))
+        .collect();
+
+    let series = InstantSeries::new(vec![], samples);
+    let iter = SeriesListInstantIterator::new(vec![series]);
+    Ok(EvalValue::Instant(Box::new(iter)))
+}
+
+pub static TIME_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "time",
+    arg_types: &[],
     return_type: ExpressionType::InstantVector,
-    eval: eval_abs,
+    eval: eval_time,
 };
 
-pub fn eval_rate(mut args: Vec<EvalValue>) -> Result<EvalValue, String> {
+pub fn eval_rate(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
     let EvalValue::Range(inner) = args.remove(0) else {
         unreachable!("validated by analyzer");
     };
@@ -205,7 +383,8 @@ mod tests {
             series_list: vec![series1],
         };
 
-        let res = eval_rate(vec![EvalValue::Range(Box::new(iter))]).unwrap();
+        let context = QueryContext::new(vec![]);
+        let res = eval_rate(vec![EvalValue::Range(Box::new(iter))], context).unwrap();
         if let EvalValue::Instant(mut iter) = res {
             let mut actual = vec![];
             loop {
@@ -243,7 +422,8 @@ mod tests {
             series_list: vec![series1],
         };
 
-        let res = eval_abs(vec![EvalValue::Instant(Box::new(iter))]).unwrap();
+        let context = QueryContext::new(vec![]);
+        let res = eval_abs(vec![EvalValue::Instant(Box::new(iter))], context).unwrap();
         if let EvalValue::Instant(mut iter) = res {
             let mut actual = vec![];
             loop {
