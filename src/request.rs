@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::core::Timestamp;
 
+#[derive(Debug)]
 pub struct QueryRangeRequest {
     pub query: String,
     pub start: Timestamp,
@@ -15,4 +16,9 @@ pub struct QueryRequest {
     pub time: Timestamp,
     pub timeout: Duration,
     // https://prometheus.io/docs/prometheus/latest/querying/api/#instant-queries
+}
+
+#[derive(Debug)]
+pub struct QueryLabelValuesRequest {
+    pub label_name: String,
 }

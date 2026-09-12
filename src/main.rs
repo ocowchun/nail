@@ -19,7 +19,7 @@ use nail::config::{Config, read_config};
 use nail::core::{Label, Labels, Timestamp};
 use nail::head::Head;
 use nail::query_exec::QueryExec;
-use nail::request::{QueryRangeRequest, QueryRequest};
+use nail::request::{QueryLabelValuesRequest, QueryRangeRequest, QueryRequest};
 use nail::scraper::{ScrapeConfig, Scraper, StaticConfig};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -407,8 +407,15 @@ async fn handle_rules() -> Response<ResponseBody> {
     text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
 
-async fn handle_label_values(request: Request<Incoming>) -> Response<ResponseBody> {
-    let label_values = vec!["horenso", "cyasyou", "tamago", "nori"];
+async fn handle_label_values(
+    _request: Request<Incoming>,
+    label_name: &str,
+    head: Arc<Head>,
+) -> Response<ResponseBody> {
+    let req = QueryLabelValuesRequest {
+        label_name: label_name.to_string(),
+    };
+    let label_values: Vec<_> = head.query_label_values(req).into_iter().collect();
     let response = ApiResponse {
         status: "success",
         data: label_values,
@@ -427,13 +434,21 @@ async fn handle_label_values(request: Request<Incoming>) -> Response<ResponseBod
     }
 }
 
-async fn handle_dynamic_path(request: Request<Incoming>) -> Response<ResponseBody> {
+async fn handle_dynamic_path(
+    request: Request<Incoming>,
+    head: Arc<Head>,
+) -> Response<ResponseBody> {
     let path = request.uri().path().to_owned();
     if request.method() == &Method::GET
         && path.starts_with("/api/v1/label/")
         && path.ends_with("/values")
     {
-        return handle_label_values(request).await;
+        let label_name = path
+            .strip_prefix("/api/v1/label/")
+            .unwrap()
+            .strip_suffix("/values")
+            .unwrap();
+        return handle_label_values(request, label_name, head).await;
     } else {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -461,7 +476,7 @@ async fn handle_request(
         (&Method::POST, "/api/v1/query") => handle_query(request, head).await,
         (&Method::GET, "/api/v1/rules") => handle_rules().await,
 
-        _ => handle_dynamic_path(request).await,
+        _ => handle_dynamic_path(request, head).await,
     };
     let message = format!("{} {} {}", method, path, response.status().as_str());
     log(&message).await;

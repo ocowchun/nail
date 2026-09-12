@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap, HashMap},
+    collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     sync::{RwLock, atomic::AtomicU64},
 };
@@ -10,6 +10,7 @@ use regex::Regex;
 use crate::{
     ast::{LabelMatcher, LabelMatcherOperator},
     core::Label,
+    request::QueryLabelValuesRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -142,6 +143,13 @@ impl Shard {
 
         self.series_by_key.insert(key.clone(), id);
         self.series_by_id.insert(id, Series::new(id, key));
+    }
+
+    fn query_label_values(&self, label_name: &str) -> HashSet<String> {
+        self.postings
+            .get(label_name)
+            .map(|m| m.keys().map(|k| k.clone()).collect::<HashSet<_>>())
+            .unwrap_or(HashSet::new())
     }
 
     fn query_postings_for_equal(&self, matcher: &LabelMatcher) -> Vec<SeriesId> {
@@ -363,6 +371,19 @@ impl Head {
 
         result.sort_unstable_by_key(|series| series.id);
         Ok(result)
+    }
+
+    pub fn query_label_values(&self, req: QueryLabelValuesRequest) -> HashSet<String> {
+        let mut result = HashSet::new();
+        for shard in &self.shards {
+            let shard = shard.read().unwrap();
+            let values = shard.query_label_values(&req.label_name);
+            for value in values.into_iter() {
+                result.insert(value);
+            }
+        }
+
+        result
     }
 }
 
