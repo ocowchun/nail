@@ -112,7 +112,8 @@ impl QueryExec {
             }
             Plan::RangeSelector(_) => return Err(format!("must be Scalar or instant Vector")),
             Plan::Call(call) => {
-                todo!();
+                let iter = self.eval_call(call, query_points)?;
+                Ok(iter)
             }
             Plan::Binary(binary) => self.eval_binary(binary, &query_points),
             Plan::SimpleAgg(simple_agg) => {
@@ -316,7 +317,7 @@ impl HeadInstantSeriesIterator {
         }
     }
 
-    fn load_data(&mut self) {
+    fn load_data(&mut self) -> Result<(), String> {
         if self.is_ready {
             panic!("doule call load data");
         }
@@ -330,7 +331,7 @@ impl HeadInstantSeriesIterator {
             end: TimestampSecond(self.query_points.last().unwrap().clone()),
         };
         println!("load_data range {:?}", range);
-        let query_series = self.head.query_range(&self.matchers, range);
+        let query_series = self.head.query_range(&self.matchers, range)?;
         let mut iter = query_series.iter();
 
         let mut series_list = vec![];
@@ -370,13 +371,14 @@ impl HeadInstantSeriesIterator {
             });
         }
         self.series_list = series_list;
+        Ok(())
     }
 }
 
 impl InstantSeriesIterator for HeadInstantSeriesIterator {
     fn next(&mut self) -> Result<Option<InstantSeries>, String> {
         if !self.is_ready {
-            self.load_data();
+            self.load_data()?;
             self.is_ready = true;
         }
 
@@ -761,7 +763,10 @@ impl HeadRangeSeriesIterator {
                     start: TimestampSecond(start),
                     end: TimestampSecond(end),
                 };
-                let res = self.head.query_range(&self.matchers, range.clone());
+                let res = self
+                    .head
+                    .query_range(&self.matchers, range.clone())
+                    .unwrap();
 
                 for series in res.into_iter() {
                     let sample = RangeSample {

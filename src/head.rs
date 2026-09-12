@@ -1,13 +1,11 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    fmt::format,
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap, HashMap},
     hash::{DefaultHasher, Hash, Hasher},
-    ops::Index,
-    str::FromStr,
-    sync::{Arc, RwLock, atomic::AtomicU64},
+    sync::{RwLock, atomic::AtomicU64},
 };
 
-use hyper_util::client::proxy::matcher;
+use regex::Regex;
 
 use crate::{
     ast::{LabelMatcher, LabelMatcherOperator},
@@ -94,10 +92,6 @@ impl Series {
         let end = self
             .samples
             .partition_point(|sample| sample.timestamp <= range.end);
-        // println!(
-        //     "query_range range_start: {} - {} {start} .. {end}",
-        //     range.start.0, range.end.0,
-        // );
         &self.samples[start..end]
     }
 }
@@ -145,44 +139,132 @@ impl Shard {
         self.series_by_id.insert(id, Series::new(id, key));
     }
 
-    fn query_postings_for_equal(&self, matcher: &LabelMatcher) -> &[SeriesId] {
-        self.postings
-            .get(&matcher.label_name)
-            .and_then(|values| values.get(&matcher.label_value))
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-    }
-
-    fn query_postings(&self, matcher: &LabelMatcher) -> &[SeriesId] {
-        match matcher.operator {
-            LabelMatcherOperator::Equal => self.query_postings_for_equal(matcher),
-            _ => {
-                todo!()
+    fn query_postings_for_equal(&self, matcher: &LabelMatcher) -> Vec<SeriesId> {
+        match self.postings.get(&matcher.label_name) {
+            Some(values) => values
+                .get(&matcher.label_value)
+                .map(|v| v.clone())
+                .unwrap_or(vec![]),
+            None => {
+                vec![]
             }
         }
     }
 
-    fn select(&self, matchers: &[LabelMatcher]) -> Vec<SeriesId> {
+    fn query_postings_for_not_equal(&self, matcher: &LabelMatcher) -> Vec<SeriesId> {
+        match self.postings.get(&matcher.label_name) {
+            Some(values) => {
+                let vectors = values
+                    .iter()
+                    .filter(|(k, _)| (*k).ne(&matcher.label_value))
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                Self::merge_sorted(vectors)
+            }
+            None => {
+                vec![]
+            }
+        }
+    }
+
+    fn query_postings_for_regex_match(
+        &self,
+        matcher: &LabelMatcher,
+    ) -> Result<Vec<SeriesId>, String> {
+        let re = Regex::new(&matcher.label_value).map_err(|err| err.to_string())?;
+
+        let res = match self.postings.get(&matcher.label_name) {
+            Some(values) => {
+                let vectors = values
+                    .iter()
+                    .filter(|(k, _)| re.is_match(*k))
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                Self::merge_sorted(vectors)
+            }
+            None => {
+                vec![]
+            }
+        };
+        Ok(res)
+    }
+
+    fn merge_sorted(vectors: Vec<Vec<SeriesId>>) -> Vec<SeriesId> {
+        let total_len: usize = vectors.iter().map(Vec::len).sum();
+        let mut result = Vec::with_capacity(total_len);
+
+        let mut heap = BinaryHeap::new();
+        for (vec_index, v) in vectors.iter().enumerate() {
+            if let Some(&value) = v.first() {
+                heap.push(Reverse((value, vec_index, 0)));
+            }
+        }
+
+        while let Some(Reverse((value, vec_index, elem_index))) = heap.pop() {
+            result.push(value);
+
+            let next_index = elem_index + 1;
+            if let Some(&next_value) = vectors[vec_index].get(next_index) {
+                heap.push(Reverse((next_value, vec_index, next_index)));
+            }
+        }
+
+        result
+    }
+
+    fn query_postings_for_not_regex_match(
+        &self,
+        matcher: &LabelMatcher,
+    ) -> Result<Vec<SeriesId>, String> {
+        let re = Regex::new(&matcher.label_value).map_err(|err| err.to_string())?;
+
+        let res = match self.postings.get(&matcher.label_name) {
+            Some(values) => {
+                let vectors = values
+                    .iter()
+                    .filter(|(k, _)| !re.is_match(*k))
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                Self::merge_sorted(vectors)
+            }
+            None => {
+                vec![]
+            }
+        };
+        Ok(res)
+    }
+
+    fn query_postings(&self, matcher: &LabelMatcher) -> Result<Vec<SeriesId>, String> {
+        match matcher.operator {
+            LabelMatcherOperator::Equal => Ok(self.query_postings_for_equal(matcher)),
+            LabelMatcherOperator::NotEqual => Ok(self.query_postings_for_not_equal(matcher)),
+            LabelMatcherOperator::RegexMatch => self.query_postings_for_regex_match(matcher),
+            LabelMatcherOperator::NotRegexMatch => self.query_postings_for_not_regex_match(matcher),
+        }
+    }
+
+    fn select(&self, matchers: &[LabelMatcher]) -> Result<Vec<SeriesId>, String> {
         if matchers.is_empty() {
             let mut ids: Vec<_> = self.series_by_id.keys().copied().collect();
             ids.sort_unstable();
-            return ids;
+            return Ok(ids);
         }
 
-        let postings: Vec<&[SeriesId]> = matchers
-            .iter()
-            .map(|matcher| self.query_postings(matcher))
-            .collect();
+        let mut postings = vec![];
+        for matcher in matchers.iter() {
+            let posting = self.query_postings(matcher)?;
+            postings.push(posting);
+        }
 
         let Some(smallets) = postings.iter().min_by_key(|posting| posting.len()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
         if smallets.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
-        smallets
+        let res = smallets
             .iter()
             .copied()
             .filter(|series_id| {
@@ -190,10 +272,12 @@ impl Shard {
                     .iter()
                     .all(|posting| posting.binary_search(series_id).is_ok())
             })
-            .collect()
+            .collect();
+        Ok(res)
     }
 }
 
+#[derive(Debug)]
 pub struct QuerySeries {
     pub id: SeriesId,
     pub labels: Vec<Label>,
@@ -245,12 +329,16 @@ impl Head {
         Ok(series_id)
     }
 
-    pub fn query_range(&self, matchers: &[LabelMatcher], range: TimeRange) -> Vec<QuerySeries> {
+    pub fn query_range(
+        &self,
+        matchers: &[LabelMatcher],
+        range: TimeRange,
+    ) -> Result<Vec<QuerySeries>, String> {
         let mut result = Vec::new();
 
         for shard in &self.shards {
             let shard = shard.read().unwrap();
-            let series_ids = shard.select(matchers);
+            let series_ids = shard.select(matchers)?;
             for series_id in series_ids {
                 let series = shard
                     .series_by_id
@@ -259,7 +347,6 @@ impl Head {
 
                 let samples = series.query_samples(&range).to_vec();
                 if !samples.is_empty() {
-                    println!("head.query_range, push series");
                     result.push(QuerySeries {
                         id: series.id,
                         labels: series.key.labels.clone(),
@@ -270,7 +357,7 @@ impl Head {
         }
 
         result.sort_unstable_by_key(|series| series.id);
-        result
+        Ok(result)
     }
 }
 
@@ -279,6 +366,7 @@ mod tests {
     use std::{
         cell::{Cell, RefCell},
         ops::Add,
+        sync::Arc,
         thread,
         time::Duration,
     };
@@ -303,8 +391,7 @@ mod tests {
                         end: TimestampSecond(200),
                     };
 
-                    let res = h.query_range(&matchers, range);
-                    println!("t1 query {}", res.len());
+                    let res = h.query_range(&matchers, range).unwrap();
                     if res.is_empty() {
                         thread::sleep(Duration::from_millis(100));
                     } else {
@@ -345,7 +432,7 @@ mod tests {
                 end: TimestampSecond(200),
             };
 
-            let res = h.query_range(&matchers, range);
+            let res = h.query_range(&matchers, range).unwrap();
 
             assert_eq!(res.len(), 1);
             let samples = &res.first().unwrap().samples;
@@ -360,6 +447,54 @@ mod tests {
     }
 
     #[test]
+    fn head_regex_match() {
+        let h = Arc::new(Head::new(8));
+        vec!["FooWriter", "BarWriter", "FooReader", "Sharder"]
+            .into_iter()
+            .for_each(|service| {
+                let labels = vec![
+                    Label {
+                        name: format!("__name__"),
+                        value: format!("dummy_counter"),
+                    },
+                    Label {
+                        name: format!("service"),
+                        value: service.to_string(),
+                    },
+                ];
+
+                let series_key = SeriesKey::from(labels).unwrap();
+                let sample = Sample {
+                    timestamp: TimestampSecond(123),
+                    value: f64::from(456),
+                };
+
+                h.append(series_key, sample).unwrap();
+            });
+
+        let matchers = vec![
+            LabelMatcher::new(
+                LabelMatcherOperator::Equal,
+                "__name__".to_string(),
+                "dummy_counter".to_string(),
+            ),
+            LabelMatcher::new(
+                LabelMatcherOperator::RegexMatch,
+                "service".to_string(),
+                ".*Writer".to_string(),
+            ),
+        ];
+        let range = TimeRange {
+            start: TimestampSecond(0),
+            end: TimestampSecond(200),
+        };
+
+        let res = h.query_range(&matchers, range).unwrap();
+
+        assert_eq!(res.len(), 2);
+    }
+
+    #[test]
     fn test_threads() {
         let a = Cell::new(5);
         let b = RefCell::new(5);
@@ -370,9 +505,5 @@ mod tests {
         {
             b.borrow_mut().add(3);
         }
-
-        println!("a is {}", a.into_inner());
-        println!("b is {}", b.into_inner());
     }
-    // fn foo(head: Arc<RwLock<Head>>) {}
 }
