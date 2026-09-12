@@ -354,8 +354,8 @@ where
     }
 }
 
-struct SeriesListInstantIterator {
-    series_list: Vec<InstantSeries>,
+pub struct SeriesListInstantIterator {
+    pub series_list: Vec<InstantSeries>,
 }
 
 impl SeriesListInstantIterator {
@@ -495,7 +495,12 @@ impl InstantSeriesIterator for RateIterator {
                 }
             }
 
-            let labels = series.labels;
+            // remove __name__label to follow prometheus rate function
+            let labels = series
+                .labels
+                .into_iter()
+                .filter(|l| l.name != "__name__")
+                .collect();
             Ok(Some(InstantSeries::new(labels, samples)))
         } else {
             Ok(None)

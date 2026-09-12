@@ -47,7 +47,6 @@ impl QueryExec {
         loop {
             let mut series = iter.next()?;
             if let Some(series) = series.as_mut() {
-                println!("query: add sample");
                 let sample = series.samples.pop().unwrap();
                 // TODO: use move instead of clone
                 let labels = series.labels.clone();
@@ -243,6 +242,7 @@ pub struct QueryRangeResult {
     pub result: Vec<InstantSeries>,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct InstantSeries {
     pub labels: Vec<Label>,
     pub samples: Vec<Sample>,
@@ -331,7 +331,6 @@ impl HeadInstantSeriesIterator {
             start: TimestampSecond(start),
             end: TimestampSecond(self.query_points.last().unwrap().clone()),
         };
-        println!("load_data range {:?}", range);
         let query_series = self.head.query_range(&self.matchers, range)?;
         let mut iter = query_series.iter();
 
@@ -342,13 +341,10 @@ impl HeadInstantSeriesIterator {
 
             let mut candidate = None;
 
-            println!("series len -> {}", series.samples.len());
             for query_point in self.query_points.iter() {
-                // println!("target_timestamp -> {}", target_timestamp.0);
                 while cursor < series.samples.len()
                     && series.samples[cursor].timestamp <= TimestampSecond(*query_point)
                 {
-                    println!("sample {}", series.samples[cursor].timestamp.0);
                     candidate = Some(series.samples[cursor]);
                     cursor += 1;
                 }
@@ -544,7 +540,7 @@ enum Accumulator {
 impl Accumulator {
     fn new(op: &SimpleAggregationOperator, value: f64) -> Self {
         match op {
-            SimpleAggregationOperator::Sum => Self::Sum(0.0),
+            SimpleAggregationOperator::Sum => Self::Sum(value),
             SimpleAggregationOperator::Avg => Self::Avg {
                 sum: value,
                 count: 1,
@@ -603,6 +599,7 @@ impl SimpleAggregationIterator {
 
     fn drain_and_aggregate(&mut self) -> Result<(), String> {
         let mut store: HashMap<Labels, BTreeMap<TimestampSecond, Accumulator>> = HashMap::new();
+
         loop {
             let entry = self.inner_iter.next()?;
             if let Some(series) = entry {
@@ -808,7 +805,9 @@ impl RangeSeriesIterator for HeadRangeSeriesIterator {
 
 #[cfg(test)]
 mod tests {
-    use crate::head::SeriesKey;
+    use std::fmt::format;
+
+    use crate::{function::SeriesListInstantIterator, head::SeriesKey};
 
     use super::*;
 
@@ -985,5 +984,76 @@ mod tests {
             },
         ];
         assert_eq!(series.samples, expected_samples);
+    }
+
+    #[test]
+    fn test_simple_agg_iterator() {
+        let mut series_list = vec![];
+        vec!["foo", "bar"].into_iter().for_each(|service| {
+            let samples: Vec<_> = (0..3)
+                .into_iter()
+                .map(|i| Sample::new(TimestampSecond::new(i as i64), i as f64))
+                .collect();
+            series_list.push(InstantSeries {
+                labels: vec![
+                    Label::new(format!("__name__"), format!("dummy_counter")),
+                    Label::new(format!("service"), service.to_string()),
+                    Label::new(format!("pod"), format!("pod1")),
+                ],
+                samples: samples.clone(),
+            });
+            series_list.push(InstantSeries {
+                labels: vec![
+                    Label::new(format!("__name__"), format!("dummy_counter")),
+                    Label::new(format!("service"), service.to_string()),
+                    Label::new(format!("pod"), format!("pod1")),
+                ],
+                samples: samples.clone(),
+            });
+        });
+        let inner_iter = SeriesListInstantIterator::new(series_list);
+
+        let mut iter = SimpleAggregationIterator::new(
+            SimpleAggregationOperator::Sum,
+            Box::new(inner_iter),
+            false,
+            vec![format!("service")],
+        );
+
+        let mut actual_series_list = vec![];
+        loop {
+            if let Some(series) = iter.next().unwrap() {
+                actual_series_list.push(series);
+            } else {
+                break;
+            }
+        }
+        actual_series_list.sort_by(|left, right| {
+            left.labels
+                .first()
+                .unwrap()
+                .value
+                .cmp(&right.labels.first().unwrap().value)
+        });
+
+        let expected_series_list = vec![
+            InstantSeries::new(
+                vec![Label::new(format!("service"), format!("bar"))],
+                vec![
+                    Sample::new(TimestampSecond(0), 0.0),
+                    Sample::new(TimestampSecond(1), 2.0),
+                    Sample::new(TimestampSecond(2), 4.0),
+                ],
+            ),
+            InstantSeries::new(
+                vec![Label::new(format!("service"), format!("foo"))],
+                vec![
+                    Sample::new(TimestampSecond(0), 0.0),
+                    Sample::new(TimestampSecond(1), 2.0),
+                    Sample::new(TimestampSecond(2), 4.0),
+                ],
+            ),
+        ];
+        assert_eq!(actual_series_list, expected_series_list);
     }
 }
