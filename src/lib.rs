@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod api;
 pub mod ast;
 pub mod config;
 pub mod core;
