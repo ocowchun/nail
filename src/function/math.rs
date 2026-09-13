@@ -151,23 +151,10 @@ pub static ROUND_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
 mod tests {
     use crate::{
         head::{Sample, TimestampSecond},
-        query_exec::{InstantSeries, InstantSeriesIterator},
+        query_exec::{InstantSeries, SeriesListInstantIterator},
     };
 
     use super::*;
-
-    struct DummyInstantIterator {
-        series_list: Vec<InstantSeries>,
-    }
-
-    impl InstantSeriesIterator for DummyInstantIterator {
-        fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
-            if let Some(series) = self.series_list.pop() {
-                return Ok(Some(series));
-            }
-            return Ok(None);
-        }
-    }
 
     #[test]
     fn test_abs_function() {
@@ -181,7 +168,7 @@ mod tests {
                 .collect();
             InstantSeries::new(labels, samples)
         };
-        let iter = DummyInstantIterator {
+        let iter = SeriesListInstantIterator {
             series_list: vec![series1],
         };
 

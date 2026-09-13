@@ -26,6 +26,14 @@ static FUNCTIONS: &[&FunctionSpec] = &[
     &math::SQRT_FUNCTION_SPEC,
     &rate::RATE_FUNCTION_SPEC,
     &time::TIME_FUNCTION_SPEC,
+    &time::DAY_OF_MONTH_FUNCTION_SPEC,
+    &time::DAY_OF_WEEK_FUNCTION_SPEC,
+    &time::DAY_OF_YEAR_FUNCTION_SPEC,
+    &time::DAYS_IN_MONTH_FUNCTION_SPEC,
+    &time::HOUR_FUNCTION_SPEC,
+    &time::MINUTE_FUNCTION_SPEC,
+    &time::MONTH_FUNCTION_SPEC,
+    &time::YEAR_FUNCTION_SPEC,
     &vector::VECTOR_FUNCTION_SPEC,
 ];
 

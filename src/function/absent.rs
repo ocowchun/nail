@@ -127,24 +127,12 @@ mod tests {
     use crate::{
         head::{Sample, TimeRange, TimestampSecond},
         query_exec::{
-            InstantSeries, InstantSeriesIterator, RangeSample, RangeSeries, SeriesListRangeIterator,
+            InstantSeries, InstantSeriesIterator, RangeSample, RangeSeries,
+            SeriesListInstantIterator, SeriesListRangeIterator,
         },
     };
 
     use super::*;
-
-    struct DummyInstantIterator {
-        series_list: Vec<InstantSeries>,
-    }
-
-    impl InstantSeriesIterator for DummyInstantIterator {
-        fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
-            if let Some(series) = self.series_list.pop() {
-                return Ok(Some(series));
-            }
-            return Ok(None);
-        }
-    }
 
     #[test]
     fn test_absent_function() {
@@ -158,7 +146,7 @@ mod tests {
                 .collect();
             InstantSeries::new(labels, samples)
         };
-        let iter = DummyInstantIterator {
+        let iter = SeriesListInstantIterator {
             series_list: vec![series1],
         };
 
