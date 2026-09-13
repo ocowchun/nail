@@ -1,8 +1,14 @@
-use std::{iter::Peekable, str::Chars, sync::Arc, time::Duration};
+use std::{
+    iter::Peekable,
+    str::Chars,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use chrono::Local;
 use futures::{StreamExt, stream};
 use itertools::{Either, Itertools};
+use metrics_exporter_prometheus::PrometheusHandle;
 use reqwest::Client;
 
 use crate::{
@@ -53,15 +59,25 @@ struct ScrapeTask {
 
 pub struct Scraper {
     head: Arc<Head>,
+    metric_handle: Arc<PrometheusHandle>,
     configs: Vec<ScrapeConfig>,
 }
 
 impl Scraper {
-    pub fn new(head: Arc<Head>, configs: Vec<ScrapeConfig>) -> Self {
-        Self { head, configs }
+    pub fn new(
+        head: Arc<Head>,
+        metric_handle: Arc<PrometheusHandle>,
+        configs: Vec<ScrapeConfig>,
+    ) -> Self {
+        Self {
+            head,
+            metric_handle,
+            configs,
+        }
     }
 
     pub async fn scrape(&self) -> Result<(), String> {
+        let started_at = Instant::now();
         let now = Local::now();
         let timestamp = TimestampSecond(now.timestamp());
         println!("run scrape, timestamp -> {}", timestamp.0);
@@ -115,6 +131,10 @@ impl Scraper {
             }
         }
 
+        let elapsed = started_at.elapsed();
+        metrics::histogram!("scrape_duration_seconds").record(elapsed.as_secs_f64());
+        metrics::counter!("scrape_samples_total").increment(appended as u64);
+
         println!("append {} samples", appended);
 
         Ok(())
@@ -140,9 +160,6 @@ impl Scraper {
         let text = res.text().await.unwrap();
         let metrics = MetricsParser::parse(&text)?;
 
-        // for metric in metrics.iter() {
-
-        // }
         let (metrics, errors): (Vec<_>, Vec<_>) = metrics
             .into_iter()
             .map(|metric| match metric.labels.merge(&task.default_labels) {

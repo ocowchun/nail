@@ -38,3 +38,6 @@ reqwest =  "0.12"
 futures = "0.3"
 itertools = "0.14"
 regex = "1.13.1"
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
+tokio-metrics = { version = "0.5.2", features = ["metrics-rs-integration"] }

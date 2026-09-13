@@ -3,7 +3,8 @@ use std::convert::Infallible;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::task::Context;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use chrono::Local;
@@ -12,6 +13,7 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::header::CONTENT_TYPE;
 use hyper::{Method, Request, Response, StatusCode};
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 
 use crate::core::Timestamp;
@@ -165,7 +167,10 @@ async fn parse_query_range_request(
     QueryRangeRequest::try_from(raw_request)
 }
 
-async fn handle_query_range(request: Request<Incoming>, head: Arc<Head>) -> Response<ResponseBody> {
+async fn handle_query_range(
+    request: Request<Incoming>,
+    context: Arc<APIContext>,
+) -> Response<ResponseBody> {
     let req = match parse_query_range_request(request).await {
         Ok(req) => req,
         Err(_) => {
@@ -174,7 +179,7 @@ async fn handle_query_range(request: Request<Incoming>, head: Arc<Head>) -> Resp
         }
     };
 
-    let query_exec = QueryExec::new(head.clone());
+    let query_exec = QueryExec::new(context.head.clone());
     let res = match query_exec.query_range(req) {
         Ok(res) => res,
         Err(err) => {
@@ -185,31 +190,6 @@ async fn handle_query_range(request: Request<Incoming>, head: Arc<Head>) -> Resp
         }
     };
 
-    // let metric = BTreeMap::from([
-    //     ("__name__".to_owned(), "dummy_cpu_usage".to_owned()),
-    //     ("instance".to_owned(), "localhost:9090".to_owned()),
-    //     ("job".to_owned(), "dummy".to_owned()),
-    // ]);
-
-    // let start = req.start.as_seconds();
-    // let end = req.end.as_seconds();
-    // let step = req.step.as_secs_f64();
-    // let sample_count = ((end - start) / step).floor() as usize + 1;
-
-    // let values: Vec<(f64, String)> = (0..sample_count)
-    //     .map(|index| {
-    //         let timestamp = start + index as f64 * step;
-    //         let value = 50.0 + (index as f64 / 5.0).sin() * 10.0;
-
-    //         (timestamp, format!("{value:.2}"))
-    //     })
-    //     .collect();
-
-    // #[derive(Debug, Serialize)]
-    // struct RangeSeries {
-    //     metric: BTreeMap<String, String>,
-    //     values: Vec<(f64, String)>,
-    // }
     let result = res
         .result
         .into_iter()
@@ -323,7 +303,10 @@ async fn parse_query_request(request: Request<Incoming>) -> Result<QueryRequest,
     QueryRequest::try_from(raw_request)
 }
 
-async fn handle_query(request: Request<Incoming>, head: Arc<Head>) -> Response<ResponseBody> {
+async fn handle_query(
+    request: Request<Incoming>,
+    context: Arc<APIContext>,
+) -> Response<ResponseBody> {
     let req = match parse_query_request(request).await {
         Ok(req) => req,
         Err(_) => {
@@ -332,7 +315,7 @@ async fn handle_query(request: Request<Incoming>, head: Arc<Head>) -> Response<R
         }
     };
 
-    let query_exec = QueryExec::new(head.clone());
+    let query_exec = QueryExec::new(Arc::clone(&context.head));
     println!("query req -> {:?}", &req);
     let res = match query_exec.query(req) {
         Ok(res) => res,
@@ -398,12 +381,12 @@ async fn handle_rules() -> Response<ResponseBody> {
 async fn handle_label_values(
     _request: Request<Incoming>,
     label_name: &str,
-    head: Arc<Head>,
+    context: Arc<APIContext>,
 ) -> Response<ResponseBody> {
     let req = QueryLabelValuesRequest {
         label_name: label_name.to_string(),
     };
-    let label_values: Vec<_> = head.query_label_values(req).into_iter().collect();
+    let label_values: Vec<_> = context.head.query_label_values(req).into_iter().collect();
     let response = ApiResponse {
         status: "success",
         data: label_values,
@@ -424,7 +407,7 @@ async fn handle_label_values(
 
 async fn handle_dynamic_path(
     request: Request<Incoming>,
-    head: Arc<Head>,
+    context: Arc<APIContext>,
 ) -> Response<ResponseBody> {
     let path = request.uri().path().to_owned();
     if request.method() == &Method::GET
@@ -436,7 +419,7 @@ async fn handle_dynamic_path(
             .unwrap()
             .strip_suffix("/values")
             .unwrap();
-        return handle_label_values(request, label_name, head).await;
+        return handle_label_values(request, label_name, context).await;
     } else {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -445,9 +428,25 @@ async fn handle_dynamic_path(
     }
 }
 
-async fn handle_metrics() -> Response<ResponseBody> {
-    // TODO
-    text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+async fn handle_metrics(context: Arc<APIContext>) -> Response<ResponseBody> {
+    Response::builder()
+        .header("content-type", "text/plain; version=0.0.4 charset=utf-8")
+        .body(Full::new(Bytes::from(context.metric_handle.render())))
+        .unwrap()
+}
+
+pub struct APIContext {
+    head: Arc<Head>,
+    metric_handle: Arc<PrometheusHandle>,
+}
+
+impl APIContext {
+    pub fn new(head: Arc<Head>, metric_handle: Arc<PrometheusHandle>) -> Self {
+        Self {
+            head,
+            metric_handle,
+        }
+    }
 }
 
 // 2026-08-22 19:02:40 GET /api/v1/labels 404
@@ -457,24 +456,41 @@ async fn handle_metrics() -> Response<ResponseBody> {
 // 2026-08-22 19:49:31 GET /api/v1/query_exemplars 404
 pub async fn handle_request(
     request: Request<Incoming>,
-    head: Arc<Head>,
+    context: Arc<APIContext>, // head: Arc<Head>,
 ) -> Result<Response<ResponseBody>, Infallible> {
+    let started = Instant::now();
+
     let method = request.method().to_string();
     let path = request.uri().path_and_query().unwrap().as_str().to_owned();
 
+    let route = if path.starts_with("/api/v1/label/") && path.ends_with("/values") {
+        "/api/v1/label/:name/values".to_owned()
+    } else {
+        path.clone()
+    };
+
     let response = match (request.method(), request.uri().path()) {
         (_, "/-/healthy") => Response::new(Full::new(Bytes::from_static(b"healthy\n"))),
-        (&Method::GET, "/api/v1/query_range") => handle_query_range(request, head).await,
-        (&Method::POST, "/api/v1/query_range") => handle_query_range(request, head).await,
+        (&Method::GET, "/api/v1/query_range") => handle_query_range(request, context).await,
+        (&Method::POST, "/api/v1/query_range") => handle_query_range(request, context).await,
         (&Method::GET, "/api/v1/status/buildinfo") => handle_build_info().await,
-        (&Method::POST, "/api/v1/query") => handle_query(request, head).await,
+        (&Method::POST, "/api/v1/query") => handle_query(request, context).await,
         (&Method::GET, "/api/v1/rules") => handle_rules().await,
-        (&Method::GET, "/metrics") => handle_metrics().await,
+        (&Method::GET, "/metrics") => handle_metrics(context).await,
 
-        _ => handle_dynamic_path(request, head).await,
+        _ => handle_dynamic_path(request, context).await,
     };
     let message = format!("{} {} {}", method, path, response.status().as_str());
     log(&message).await;
+
+    let elapsed = started.elapsed();
+    metrics::histogram!(
+        "http_request_duration_seconds",
+            "method" => method,
+            "route" => route,
+            "status" => response.status().as_u16().to_string()
+    )
+    .record(elapsed.as_secs_f64());
 
     Ok(response)
 }
