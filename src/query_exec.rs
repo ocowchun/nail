@@ -822,6 +822,25 @@ impl InstantSeriesIterator for SeriesListInstantIterator {
     }
 }
 
+pub struct SeriesListRangeIterator {
+    series_list: Vec<RangeSeries>,
+}
+
+impl SeriesListRangeIterator {
+    pub fn new(series_list: Vec<RangeSeries>) -> Self {
+        Self { series_list }
+    }
+}
+
+impl RangeSeriesIterator for SeriesListRangeIterator {
+    fn next(&mut self) -> Result<Option<RangeSeries>, String> {
+        if let Some(series) = self.series_list.pop() {
+            return Ok(Some(series));
+        }
+        return Ok(None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::format;

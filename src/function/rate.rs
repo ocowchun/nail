@@ -106,23 +106,10 @@ pub static RATE_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
 mod tests {
     use crate::{
         head::{Sample, TimeRange, TimestampSecond},
-        query_exec::RangeSeries,
+        query_exec::{RangeSeries, SeriesListRangeIterator},
     };
 
     use super::*;
-
-    struct DummyRangeIterator {
-        series_list: Vec<RangeSeries>,
-    }
-
-    impl RangeSeriesIterator for DummyRangeIterator {
-        fn next(&mut self) -> Result<Option<RangeSeries>, String> {
-            if let Some(series) = self.series_list.pop() {
-                return Ok(Some(series));
-            }
-            return Ok(None);
-        }
-    }
 
     #[test]
     fn test_rate_function() {
@@ -140,9 +127,7 @@ mod tests {
                 .collect();
             RangeSeries::new(labels, samples)
         };
-        let iter = DummyRangeIterator {
-            series_list: vec![series1],
-        };
+        let iter = SeriesListRangeIterator::new(vec![series1]);
 
         let context = QueryContext::new(vec![]);
         let res = eval_rate(vec![EvalValue::Range(Box::new(iter))], context).unwrap();

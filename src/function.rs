@@ -12,6 +12,7 @@ pub use types::QueryContext;
 
 static FUNCTIONS: &[&FunctionSpec] = &[
     &absent::ABSENT_FUNCTION_SPEC,
+    &absent::ABSENT_OVER_TIME_FUNCTION_SPEC,
     &clamp::CLAMP_FUNCTION_SPEC,
     &clamp::CLAMP_MAX_FUNCTION_SPEC,
     &clamp::CLAMP_MIN_FUNCTION_SPEC,
