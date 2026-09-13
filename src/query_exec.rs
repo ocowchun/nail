@@ -803,11 +803,30 @@ impl RangeSeriesIterator for HeadRangeSeriesIterator {
     }
 }
 
+pub struct SeriesListInstantIterator {
+    pub series_list: Vec<InstantSeries>,
+}
+
+impl SeriesListInstantIterator {
+    pub fn new(series_list: Vec<InstantSeries>) -> Self {
+        Self { series_list }
+    }
+}
+
+impl InstantSeriesIterator for SeriesListInstantIterator {
+    fn next(&mut self) -> Result<Option<crate::query_exec::InstantSeries>, String> {
+        if let Some(series) = self.series_list.pop() {
+            return Ok(Some(series));
+        }
+        return Ok(None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::format;
 
-    use crate::{function::SeriesListInstantIterator, head::SeriesKey};
+    use crate::head::SeriesKey;
 
     use super::*;
 

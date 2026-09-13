@@ -1,21 +1,15 @@
 use std::{
-    fmt::{self, format},
+    fmt::{self},
     time::Duration,
 };
 
 use crate::{
     ast::{
-        AggregationExpression::{self, K, Simple},
+        AggregationExpression::{self},
         BinaryExpression, BinaryOperator, CallExpression, Expression, LabelMatcher,
         LabelMatcherOperator, SimpleAggregationExpression, SimpleAggregationOperator, TimeSeries,
     },
-    function::{
-        ABS_FUNCTION_SPEC, ABSENT_FUNCTION_SPEC, CEIL_FUNCTION_SPEC, CLAMP_FUNCTION_SPEC,
-        CLAMP_MAX_FUNCTION_SPEC, CLAMP_MIN_FUNCTION_SPEC, EvalValue, FLOOR_FUNCTION_SPEC,
-        FunctionSpec, LN_FUNCTION_SPEC, LOG2_FUNCTION_SPEC, LOG10_FUNCTION_SPEC,
-        RATE_FUNCTION_SPEC, ROUND_FUNCTION_SPEC, SQRT_FUNCTION_SPEC, TIME_FUNCTION_SPEC,
-        VECTOR_FUNCTION_SPEC,
-    },
+    function::{self, FunctionSpec},
 };
 
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -274,29 +268,15 @@ impl Analyzer {
             args.push(arg);
         }
 
-        let spec = match expression.name.as_ref() {
-            "abs" => &ABS_FUNCTION_SPEC,
-            "absent" => &ABSENT_FUNCTION_SPEC,
-            "ceil" => &CEIL_FUNCTION_SPEC,
-            "clamp" => &CLAMP_FUNCTION_SPEC,
-            "clamp_max" => &CLAMP_MAX_FUNCTION_SPEC,
-            "clamp_min" => &CLAMP_MIN_FUNCTION_SPEC,
-            "floor" => &FLOOR_FUNCTION_SPEC,
-            "ln" => &LN_FUNCTION_SPEC,
-            "log2" => &LOG2_FUNCTION_SPEC,
-            "log10" => &LOG10_FUNCTION_SPEC,
-            "rate" => &RATE_FUNCTION_SPEC,
-            "round" => &ROUND_FUNCTION_SPEC,
-            "sqrt" => &SQRT_FUNCTION_SPEC,
-            "time" => &TIME_FUNCTION_SPEC,
-            "vector" => &VECTOR_FUNCTION_SPEC,
-            _ => {
-                return Err(format!(
-                    "unknown function with name \"{}\"",
-                    expression.name
-                ));
-            }
+        let spec = if let Some(spec) = function::find_function_spec(&expression.name) {
+            spec
+        } else {
+            return Err(format!(
+                "unknown function with name \"{}\"",
+                expression.name
+            ));
         };
+
         if args.len() != spec.arg_types.len() {
             return Err(format!(
                 "expected {} argument(s) in call to \"{}\", got {}",
