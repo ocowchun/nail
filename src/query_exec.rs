@@ -4,16 +4,12 @@ use std::{
     time::Duration,
 };
 
-use serde_json::value;
-
 use crate::{
-    analyzer::{
-        Analyzer, Binary, Call, ExpressionType, InstantSelector, Plan, RangeSelector, SimpleAgg,
-    },
+    analyzer::{Analyzer, Binary, Call, InstantSelector, Plan, RangeSelector, SimpleAgg},
     ast::{BinaryOperator, LabelMatcher, SimpleAggregationOperator},
     core::{Label, Labels},
     function::{EvalValue, QueryContext},
-    head::{Head, QuerySeries, Sample, TimeRange, TimestampSecond},
+    head::{Head, Sample, TimeRange, TimestampSecond},
     lexer::Lexer,
     parser::Parser,
     query_exec::Accumulator::{Avg, Sum},
@@ -102,7 +98,7 @@ impl QueryExec {
                 let iter = self.eval_number(n.clone(), query_points)?;
                 Ok(iter)
             }
-            Plan::String(str) => {
+            Plan::String(_str) => {
                 todo!();
             }
             Plan::InstantSelector(sel) => {
@@ -530,11 +526,24 @@ enum SimpleAggregationIteratorState {
 
 enum Accumulator {
     Sum(f64),
-    Avg { sum: f64, count: u64 },
+    Avg {
+        sum: f64,
+        count: u64,
+    },
     Min(f64),
     Max(f64),
     Count(u64),
     Group,
+    Stddev {
+        sum: f64,
+        sqaure_sum: f64,
+        count: u64,
+    },
+    Stdvar {
+        sum: f64,
+        sqaure_sum: f64,
+        count: u64,
+    },
 }
 
 impl Accumulator {
@@ -549,8 +558,16 @@ impl Accumulator {
             SimpleAggregationOperator::Max => Self::Max(f64::MAX),
             SimpleAggregationOperator::Group => Self::Group,
             SimpleAggregationOperator::Count => Self::Sum(0.0),
-            SimpleAggregationOperator::Stddev => todo!(),
-            SimpleAggregationOperator::Stdvar => todo!(),
+            SimpleAggregationOperator::Stddev => Self::Stddev {
+                sum: value,
+                sqaure_sum: value * value,
+                count: 1,
+            },
+            SimpleAggregationOperator::Stdvar => Self::Stdvar {
+                sum: value,
+                sqaure_sum: value * value,
+                count: 1,
+            },
         }
     }
 
@@ -565,6 +582,24 @@ impl Accumulator {
             Self::Max(max) => *max = max.max(sample),
             Self::Count(count) => *count += 1,
             Self::Group => {}
+            Self::Stddev {
+                sum,
+                sqaure_sum,
+                count,
+            } => {
+                *sum += sample;
+                *sqaure_sum += sample * sample;
+                *count += 1;
+            }
+            Self::Stdvar {
+                sum,
+                sqaure_sum,
+                count,
+            } => {
+                *sum += sample;
+                *sqaure_sum += sample * sample;
+                *count += 1;
+            }
         }
     }
 
@@ -576,6 +611,26 @@ impl Accumulator {
             Accumulator::Max(max) => *max,
             Accumulator::Count(count) => *count as f64,
             Accumulator::Group => 1.0,
+            Self::Stddev {
+                sum,
+                sqaure_sum,
+                count,
+            } => {
+                let mu = *sum / *count as f64;
+                let var =
+                    *sqaure_sum - (2.0 * mu * (*sum)) + (*count as f64 * mu * mu) / (*count as f64);
+                f64::sqrt(var)
+            }
+            Self::Stdvar {
+                sum,
+                sqaure_sum,
+                count,
+            } => {
+                let mu = *sum / *count as f64;
+                let var =
+                    *sqaure_sum - (2.0 * mu * (*sum)) + (*count as f64 * mu * mu) / (*count as f64);
+                var
+            }
         }
     }
 }
@@ -843,8 +898,6 @@ impl RangeSeriesIterator for SeriesListRangeIterator {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::format;
-
     use crate::head::SeriesKey;
 
     use super::*;
