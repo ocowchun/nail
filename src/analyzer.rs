@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn analyze_plan() {
         let lexer = Lexer::new("http_requests_total".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
         let exp = parser.parse().unwrap();
 
         let analyzer = Analyzer {};
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn analyze_plan2() {
         let lexer = Lexer::new("http_requests_total{job=\"prometheus\"}[5m]".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
         let exp = parser.parse().unwrap();
 
         let analyzer = Analyzer {};
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn analyze_plan3() {
         let lexer = Lexer::new("http_requests_total{job=\"prometheus\"} / 100".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
         let exp = parser.parse().unwrap();
 
         let analyzer = Analyzer {};
@@ -444,7 +444,7 @@ mod tests {
     fn analyze_plan4() {
         let lexer =
             Lexer::new("sum by (application) (memory_consumption_bytes{job=\"nail\"})".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
         let exp = parser.parse().unwrap();
 
         let analyzer = Analyzer {};

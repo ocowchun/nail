@@ -281,7 +281,8 @@ impl Lexer {
                 }
             }
         } else {
-            Err("EOF".to_string())
+            Ok(Token::new(TokenType::EOF, "".to_owned()))
+            // Err("EOF".to_string())
         };
     }
 

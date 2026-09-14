@@ -73,6 +73,34 @@ fn text_response(status: StatusCode, body: &str) -> Response<ResponseBody> {
         .unwrap()
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorResponse {
+    status: &'static str,
+    error_type: String,
+    error: String,
+}
+
+fn error_response(status: StatusCode, error_type: String, error: String) -> Response<ResponseBody> {
+    let err = ErrorResponse {
+        status: "error",
+        error_type: error_type,
+        error: error,
+    };
+
+    match serde_json::to_vec(&err) {
+        Ok(json) => Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(json)))
+            .unwrap(),
+        Err(error) => {
+            eprintln!("failed to seralize response: {error}");
+            text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error\n")
+        }
+    }
+}
+
 async fn handle_build_info() -> Response<ResponseBody> {
     let build_info = BuildInfo {
         version: "3.14.0",
@@ -182,12 +210,18 @@ async fn handle_query_range(
     let query_exec = QueryExec::new(context.head.clone());
     let res = match query_exec.query_range(req) {
         Ok(res) => res,
-        Err(err) => {
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("internal server error {err}\n"),
-            );
-        }
+        Err(err) => match err {
+            crate::query_exec::QueryError::InvalidRequest(err) => {
+                return error_response(StatusCode::BAD_REQUEST, "bad_data".to_owned(), err);
+            }
+            crate::query_exec::QueryError::InternalError(err) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "interna_server_error".to_owned(),
+                    err,
+                );
+            }
+        },
     };
 
     let result = res
@@ -212,16 +246,6 @@ async fn handle_query_range(
             RangeSeries { metric, values }
         })
         .collect();
-
-    // let series = RangeSeries {
-    //     metric,
-    //     values: values, // values: vec![
-    //                     //     (1_787_300_000.0, "0.42".to_owned()),
-    //                     //     (1_787_300_015.0, "0.46".to_owned()),
-    //                     //     (1_787_300_030.0, "0.51".to_owned()),
-    //                     //     (1_787_300_045.0, "0.48".to_owned()),
-    //                     // ],
-    // };
 
     let response = ApiResponse {
         status: "success",
@@ -319,16 +343,19 @@ async fn handle_query(
     println!("query req -> {:?}", &req);
     let res = match query_exec.query(req) {
         Ok(res) => res,
-        Err(err) => {
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("internal server error {err}\n"),
-            );
-        }
+        Err(err) => match err {
+            crate::query_exec::QueryError::InvalidRequest(err) => {
+                return error_response(StatusCode::BAD_REQUEST, "bad_data".to_owned(), err);
+            }
+            crate::query_exec::QueryError::InternalError(err) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "interna_server_error".to_owned(),
+                    err,
+                );
+            }
+        },
     };
-    // TODO
-    // text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-    // let scalar = (1_787_300_045.0, "0.48".to_owned());
 
     let result: Vec<InstantSeries> = res
         .result

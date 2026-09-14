@@ -20,28 +20,39 @@ pub struct QueryExec {
     head: Arc<Head>,
 }
 
+pub enum QueryError {
+    InvalidRequest(String),
+    InternalError(String),
+}
+
 impl QueryExec {
     pub fn new(head: Arc<Head>) -> Self {
         Self { head }
     }
 
-    pub fn query(&self, req: QueryRequest) -> Result<QueryResult, String> {
+    pub fn query(&self, req: QueryRequest) -> Result<QueryResult, QueryError> {
         let lexer = Lexer::new(req.query.clone());
-        let mut parser = Parser::new(lexer);
-        let exp = parser.parse()?;
+        let mut parser = Parser::new(lexer).map_err(|msg| QueryError::InvalidRequest(msg))?;
+        let exp = parser
+            .parse()
+            .map_err(|msg| QueryError::InvalidRequest(msg))?;
         let analyzer = Analyzer::new();
-        let plan = analyzer.analyze(&exp)?;
+        let plan = analyzer
+            .analyze(&exp)
+            .map_err(|msg| QueryError::InvalidRequest(msg))?;
 
         // TODO: refactor to remove the duplication between query and query_range
 
         let start = req.time.as_seconds() as i64;
         let query_points = vec![start];
 
-        let mut iter = self.evaluate(plan, &query_points)?;
+        let mut iter = self
+            .evaluate(plan, &query_points)
+            .map_err(|msg| QueryError::InternalError(msg))?;
 
         let mut result = vec![];
         loop {
-            let mut series = iter.next()?;
+            let mut series = iter.next().map_err(|msg| QueryError::InternalError(msg))?;
             if let Some(series) = series.as_mut() {
                 let sample = series.samples.pop().unwrap();
                 // TODO: use move instead of clone
@@ -54,12 +65,16 @@ impl QueryExec {
         Ok(QueryResult { result })
     }
 
-    pub fn query_range(&self, req: QueryRangeRequest) -> Result<QueryRangeResult, String> {
+    pub fn query_range(&self, req: QueryRangeRequest) -> Result<QueryRangeResult, QueryError> {
         let lexer = Lexer::new(req.query.clone());
-        let mut parser = Parser::new(lexer);
-        let exp = parser.parse()?;
+        let mut parser = Parser::new(lexer).map_err(|msg| QueryError::InvalidRequest(msg))?;
+        let exp = parser
+            .parse()
+            .map_err(|msg| QueryError::InvalidRequest(msg))?;
         let analyzer = Analyzer::new();
-        let plan = analyzer.analyze(&exp)?;
+        let plan = analyzer
+            .analyze(&exp)
+            .map_err(|msg| QueryError::InvalidRequest(msg))?;
 
         let start = req.start.as_seconds() as i64;
         let end = req.end.as_seconds() as i64;
@@ -73,11 +88,13 @@ impl QueryExec {
             })
             .collect();
 
-        let mut iter = self.evaluate(plan, &query_points)?;
+        let mut iter = self
+            .evaluate(plan, &query_points)
+            .map_err(|msg| QueryError::InternalError(msg))?;
 
         let mut result = vec![];
         loop {
-            let series = iter.next()?;
+            let series = iter.next().map_err(|msg| QueryError::InternalError(msg))?;
             if let Some(series) = series {
                 result.push(series);
             } else {

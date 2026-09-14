@@ -18,7 +18,6 @@ use crate::lexer::Lexer;
 use crate::lexer::Token;
 use crate::lexer::TokenType;
 use crate::lexer::TokenType::LeftBrace;
-use crate::lexer::TokenType::LeftParenthesis;
 use crate::lexer::TokenType::TimeDurationLiteral;
 
 pub struct Parser {
@@ -29,44 +28,45 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(lexer: Lexer) -> Parser {
+    pub fn new(lexer: Lexer) -> Result<Parser, String> {
         let mut p = Parser {
             lexer,
             current_token: Token::new(TokenType::EOF, "".to_string()),
             peek_token: Token::new(TokenType::EOF, "".to_string()),
             error: None,
         };
-        p.next_token();
-        p.next_token();
+        p.next_token()?;
+        p.next_token()?;
 
-        p
+        Ok(p)
     }
 
-    fn next_token(&mut self) -> Option<Token> {
+    fn next_token(&mut self) -> Result<Option<Token>, String> {
         if let Some(_) = &self.error {
-            return None;
+            return Ok(None);
         }
 
         match self.lexer.next_token() {
             Ok(mut token) => {
                 mem::swap(&mut self.peek_token, &mut token);
                 mem::swap(&mut self.current_token, &mut token);
-                return Some(token);
+                return Ok(Some(token));
             }
             Err(err) => {
-                let mut token = Token::new(TokenType::EOF, "".to_string());
-                mem::swap(&mut self.current_token, &mut token);
-                mem::swap(&mut self.peek_token, &mut self.current_token);
-                match err.as_str() {
-                    "EOF" => {
-                        self.peek_token = Token::new(TokenType::EOF, "".to_string());
-                    }
-                    _ => {
-                        // TODO: what should be the peek_token in this branch?
-                        self.error = Some(err);
-                    }
-                }
-                return Some(token);
+                return Err(err);
+                // let mut token = Token::new(TokenType::EOF, "".to_string());
+                // mem::swap(&mut self.current_token, &mut token);
+                // mem::swap(&mut self.peek_token, &mut self.current_token);
+                // match err.as_str() {
+                //     "EOF" => {
+                //         self.peek_token = Token::new(TokenType::EOF, "".to_string());
+                //     }
+                //     _ => {
+                //         // TODO: what should be the peek_token in this branch?
+                //         self.error = Some(err);
+                //     }
+                // }
+                // return Ok(Some(token));
             }
         }
     }
@@ -108,7 +108,7 @@ impl Parser {
     }
 
     fn parse_aggregation(&mut self) -> Result<Expression, String> {
-        let aggregation_operator_token = self.next_token().unwrap();
+        let aggregation_operator_token = self.next_token()?.unwrap();
         match aggregation_operator_token.token_type {
             TokenType::Sum
             | TokenType::Avg
@@ -141,7 +141,7 @@ impl Parser {
         let mut labels =
             if vec![TokenType::By, TokenType::Without].contains(&self.current_token.token_type) {
                 is_without = self.current_token.is(TokenType::Without);
-                self.next_token();
+                self.next_token()?;
                 self.parse_label_list()?
             } else {
                 vec![]
@@ -153,7 +153,7 @@ impl Parser {
                 self.current_token.literal
             ));
         }
-        self.next_token();
+        self.next_token()?;
 
         let exp = self.parse()?;
 
@@ -163,14 +163,14 @@ impl Parser {
                 self.current_token.literal
             ));
         }
-        self.next_token();
+        self.next_token()?;
 
         if vec![TokenType::By, TokenType::Without].contains(&self.current_token.token_type) {
             if !labels.is_empty() {
                 return Err("double without/by clause".to_string());
             }
             is_without = self.current_token.is(TokenType::Without);
-            self.next_token();
+            self.next_token()?;
             labels = self.parse_label_list()?;
         }
 
@@ -186,7 +186,7 @@ impl Parser {
                 self.current_token.literal
             ));
         }
-        self.next_token();
+        self.next_token()?;
 
         while !self.current_token.is(TokenType::RightParenthesis) {
             if !self.current_token.is(TokenType::Identifier) {
@@ -196,13 +196,13 @@ impl Parser {
                 ));
             }
 
-            let token = self.next_token().unwrap();
+            let token = self.next_token()?.unwrap();
             labels.push(token.literal);
             if self.current_token.is(TokenType::Comma) {
-                self.next_token();
+                self.next_token()?;
             }
         }
-        self.next_token();
+        self.next_token()?;
 
         if labels.is_empty() {
             return Err(format!("it must contains at least one label"));
@@ -221,7 +221,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_and_unless()?;
 
@@ -246,7 +246,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_comparison()?;
 
@@ -275,7 +275,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_term()?;
 
@@ -300,7 +300,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_factor()?;
 
@@ -326,7 +326,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_caret()?;
 
@@ -350,7 +350,7 @@ impl Parser {
                     break;
                 }
             };
-            self.next_token();
+            self.next_token()?;
 
             let right = self.parse_primary()?;
 
@@ -383,7 +383,7 @@ impl Parser {
                         self.current_token.literal
                     ));
                 }
-                self.next_token();
+                self.next_token()?;
                 println!(
                     "finish_call after_next_token, current_token is {:?}",
                     self.current_token
@@ -399,7 +399,7 @@ impl Parser {
             arguments.push(Box::new(arg));
         }
 
-        self.next_token();
+        self.next_token()?;
 
         let call = CallExpression::new(callee, arguments);
         Ok(Expression::CallExpression(call))
@@ -409,22 +409,22 @@ impl Parser {
         if self.current_token.is(TokenType::IntegerLiteral)
             || self.current_token.is(TokenType::FloatLiteral)
         {
-            let token = self.next_token().unwrap();
+            let token = self.next_token()?.unwrap();
             let lit = FloatLiteral::new(token.literal);
             return Ok(Expression::FloatLiteral(lit));
         }
         if self.current_token.is(TokenType::StringLiteral) {
-            let token = self.next_token().unwrap();
+            let token = self.next_token()?.unwrap();
             let lit = token.literal;
 
             return Ok(Expression::StringLiteral(lit));
         }
 
         if self.current_token.is(TokenType::LeftParenthesis) {
-            self.next_token();
+            self.next_token()?;
             let exp = self.parse_expression()?;
             if self.current_token.is(TokenType::RightParenthesis) {
-                self.next_token();
+                self.next_token()?;
                 // TODO: might need a new expression type?
                 return Ok(exp);
             } else {
@@ -434,8 +434,8 @@ impl Parser {
 
         if self.current_token.is(TokenType::Identifier) {
             if self.peek_token.is(TokenType::LeftParenthesis) {
-                let token = self.next_token().unwrap();
-                self.next_token();
+                let token = self.next_token()?.unwrap();
+                self.next_token()?;
                 return self.finish_call(token.literal);
             }
             return self.parse_timeseries();
@@ -448,11 +448,11 @@ impl Parser {
     }
 
     fn parse_timeseries(&mut self) -> Result<Expression, String> {
-        let name = self.next_token().unwrap().literal;
+        let name = self.next_token()?.unwrap().literal;
         let mut label_matchers = vec![];
 
         if self.current_token.is(LeftBrace) {
-            self.next_token();
+            self.next_token()?;
             while !self.current_token.is(TokenType::RightBrace) {
                 if !label_matchers.is_empty() {
                     if !self.current_token.is(TokenType::Comma) {
@@ -461,7 +461,7 @@ impl Parser {
                             self.current_token.literal,
                         ));
                     }
-                    self.next_token();
+                    self.next_token()?;
                 }
 
                 if !self.current_token.is(TokenType::Identifier) {
@@ -470,7 +470,7 @@ impl Parser {
                         self.current_token.literal,
                     ));
                 }
-                let label_name = self.next_token().unwrap().literal;
+                let label_name = self.next_token()?.unwrap().literal;
                 let op = match self.current_token.token_type {
                     TokenType::Equal => LabelMatcherOperator::Equal,
                     TokenType::NotEqual => LabelMatcherOperator::NotEqual,
@@ -483,7 +483,7 @@ impl Parser {
                         ));
                     }
                 };
-                self.next_token();
+                self.next_token()?;
 
                 if !self.current_token.is(TokenType::StringLiteral) {
                     return Err(format!(
@@ -491,16 +491,16 @@ impl Parser {
                         self.current_token.literal,
                     ));
                 }
-                let label_value = self.next_token().unwrap().literal;
+                let label_value = self.next_token()?.unwrap().literal;
                 let matcher = LabelMatcher::new(op, label_name, label_value);
                 label_matchers.push(matcher);
             }
 
-            self.next_token();
+            self.next_token()?;
         }
 
         let range = if self.current_token.is(TokenType::LeftBracket) {
-            self.next_token();
+            self.next_token()?;
             if !self.current_token.is(TimeDurationLiteral) {
                 return Err(format!(
                     "expect time duration literal when parsing range but got `{}`",
@@ -508,7 +508,7 @@ impl Parser {
                 ));
             }
 
-            let token = self.next_token().unwrap();
+            let token = self.next_token()?.unwrap();
             let duration = TimeDuration::from(token.literal)?;
             if !self.current_token.is(TokenType::RightBracket) {
                 return Err(format!(
@@ -516,15 +516,15 @@ impl Parser {
                     self.current_token.literal,
                 ));
             }
-            self.next_token();
+            self.next_token()?;
             Some(duration)
         } else {
             None
         };
 
         let offset = if self.current_token.is(TokenType::Offset) {
-            self.next_token();
-            let token = self.next_token().unwrap();
+            self.next_token()?;
+            let token = self.next_token()?.unwrap();
             let duration = TimeDuration::from(token.literal)?;
             Some(duration)
         } else {
@@ -538,14 +538,12 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use crate::analyzer::ExpressionType;
-
     use super::*;
 
     #[test]
     fn parse_simple_expression() {
         let lexer = Lexer::new("http_requests_total".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
 
         let exp = parser.parse().unwrap();
         let expected_exp = Expression::TimeSeries(TimeSeries::new(
@@ -630,7 +628,7 @@ mod tests {
         ];
         series.into_iter().for_each(|(query, expected_exp)| {
             let lexer = Lexer::new(query.to_string());
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
             let exp = parser.parse().unwrap();
 
             assert_eq!(exp, expected_exp);
@@ -640,7 +638,7 @@ mod tests {
     #[test]
     fn parse_or_operator() {
         let lexer = Lexer::new("foo or bar".to_string());
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer).unwrap();
 
         let exp = parser.parse().unwrap();
         let expected_exp = Expression::BinaryExpression(BinaryExpression::new(
@@ -682,7 +680,7 @@ mod tests {
         operators.iter().for_each(|(op_str, op)| {
             let query = format!("foo {op_str} bar");
             let lexer = Lexer::new(query);
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
             let expected_exp = Expression::BinaryExpression(BinaryExpression::new(
@@ -714,7 +712,7 @@ mod tests {
         operators.iter().for_each(|(op_str, op)| {
             let query = format!("{op_str}(memory_consumption_bytes)");
             let lexer = Lexer::new(query);
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
 
@@ -734,7 +732,7 @@ mod tests {
 
             let query = format!("{op_str} by (application) (memory_consumption_bytes)");
             let lexer = Lexer::new(query);
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
 
@@ -758,7 +756,7 @@ mod tests {
     fn parse_functions() {
         {
             let lexer = Lexer::new("time()".to_string());
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
             let expected_exp =
@@ -769,7 +767,7 @@ mod tests {
 
         {
             let lexer = Lexer::new("vector(5)".to_string());
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
             let expected_exp = Expression::CallExpression(CallExpression::new(
@@ -784,7 +782,7 @@ mod tests {
 
         {
             let lexer = Lexer::new("clamp(foo, 1, 3)".to_string());
-            let mut parser = Parser::new(lexer);
+            let mut parser = Parser::new(lexer).unwrap();
 
             let exp = parser.parse().unwrap();
             let expected_exp = Expression::CallExpression(CallExpression::new(
