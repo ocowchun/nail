@@ -150,7 +150,7 @@ pub static ROUND_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
 #[cfg(test)]
 mod tests {
     use crate::{
-        head::{Sample, TimestampSecond},
+        core::{Sample, TimestampSecond},
         query_exec::{InstantSeries, SeriesListInstantIterator},
     };
 

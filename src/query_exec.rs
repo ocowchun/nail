@@ -7,9 +7,9 @@ use std::{
 use crate::{
     analyzer::{Analyzer, Binary, Call, InstantSelector, Plan, RangeSelector, SimpleAgg},
     ast::{BinaryOperator, LabelMatcher, SimpleAggregationOperator},
-    core::{Label, Labels},
+    core::{Label, Labels, Sample, TimestampSecond},
     function::{EvalValue, QueryContext},
-    head::{Head, Sample, TimeRange, TimestampSecond},
+    head::{Head, TimeRange},
     lexer::Lexer,
     parser::Parser,
     query_exec::Accumulator::{Avg, Sum},
@@ -866,6 +866,7 @@ impl RangeSeriesIterator for HeadRangeSeriesIterator {
         if !self.is_ready {
             self.load_data();
         }
+        self.is_ready = true;
 
         if let Some(series) = self.series_list.pop() {
             Ok(Some(series))
@@ -915,7 +916,7 @@ impl RangeSeriesIterator for SeriesListRangeIterator {
 
 #[cfg(test)]
 mod tests {
-    use crate::head::SeriesKey;
+    use crate::core::SeriesKey;
 
     use super::*;
 

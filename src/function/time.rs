@@ -2,10 +2,9 @@ use chrono::{DateTime, Datelike, Timelike};
 
 use crate::{
     analyzer::ExpressionType,
+    core::{Sample, TimestampSecond},
     function::types::{EvalValue, FunctionSpec, QueryContext},
-    head::Sample,
-    query_exec::InstantSeries,
-    query_exec::SeriesListInstantIterator,
+    query_exec::{InstantSeries, SeriesListInstantIterator},
 };
 
 fn base_eval(
@@ -21,7 +20,7 @@ fn base_eval(
         .into_iter()
         .map(|v| {
             let val = transform(v);
-            Sample::new(crate::head::TimestampSecond(v), val)
+            Sample::new(TimestampSecond(v), val)
         })
         .collect();
 
@@ -152,7 +151,7 @@ pub static YEAR_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
 
 #[cfg(test)]
 mod tests {
-    use crate::head::{Sample, TimestampSecond};
+    use crate::core::{Sample, TimestampSecond};
 
     use super::*;
 

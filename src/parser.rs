@@ -54,19 +54,6 @@ impl Parser {
             }
             Err(err) => {
                 return Err(err);
-                // let mut token = Token::new(TokenType::EOF, "".to_string());
-                // mem::swap(&mut self.current_token, &mut token);
-                // mem::swap(&mut self.peek_token, &mut self.current_token);
-                // match err.as_str() {
-                //     "EOF" => {
-                //         self.peek_token = Token::new(TokenType::EOF, "".to_string());
-                //     }
-                //     _ => {
-                //         // TODO: what should be the peek_token in this branch?
-                //         self.error = Some(err);
-                //     }
-                // }
-                // return Ok(Some(token));
             }
         }
     }
@@ -366,16 +353,8 @@ impl Parser {
 
     fn finish_call(&mut self, callee: String) -> Result<Expression, String> {
         let mut arguments = vec![];
-        println!("finish_call, current_token: {:?}", self.current_token);
 
         while !self.current_token.is(TokenType::RightParenthesis) {
-            println!(
-                "arguments.len -> {}, curren_token is {:?}, peek_token is {:?}",
-                arguments.len(),
-                self.current_token,
-                self.peek_token,
-            );
-
             if !arguments.is_empty() {
                 if !self.current_token.is(TokenType::Comma) {
                     return Err(format!(
@@ -384,18 +363,9 @@ impl Parser {
                     ));
                 }
                 self.next_token()?;
-                println!(
-                    "finish_call after_next_token, current_token is {:?}",
-                    self.current_token
-                );
             }
 
-            println!(
-                "finish_call parse_comparision, current_token is {:?}",
-                self.current_token
-            );
-            let arg = self.parse_comparison()?;
-            println!("yoyo arg is -> {:?}", arg);
+            let arg = self.parse_expression()?;
             arguments.push(Box::new(arg));
         }
 
@@ -538,6 +508,8 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use crate::ast::TimeUnit::Minute;
+
     use super::*;
 
     #[test]
@@ -801,5 +773,45 @@ mod tests {
 
             assert_eq!(exp, expected_exp);
         }
+    }
+
+    #[test]
+    fn parse_histogram_quantile() {
+        let lexer = Lexer::new(
+            "histogram_quantile(0.9,sum(rate(prometheus_http_request_duration_seconds{ }[5m])))"
+                .to_string(),
+        );
+        let mut parser = Parser::new(lexer).unwrap();
+
+        let exp = parser.parse().unwrap();
+        let expected_exp = Expression::CallExpression(CallExpression::new(
+            "histogram_quantile".to_string(),
+            vec![
+                Box::new(Expression::FloatLiteral(FloatLiteral::new(
+                    "0.9".to_string(),
+                ))),
+                Box::new(Expression::AggregationExpression(Simple(
+                    SimpleAggregationExpression::new(
+                        SimpleAggregationOperator::Sum,
+                        Box::new(Expression::CallExpression(CallExpression::new(
+                            "rate".to_string(),
+                            vec![Box::new(Expression::TimeSeries(TimeSeries::new(
+                                "prometheus_http_request_duration_seconds".to_string(),
+                                vec![],
+                                Some(TimeDuration {
+                                    value: 5,
+                                    unit: Minute,
+                                }),
+                                None,
+                            )))],
+                        ))),
+                        vec![],
+                        false,
+                    ),
+                ))),
+            ],
+        ));
+
+        assert_eq!(exp, expected_exp);
     }
 }

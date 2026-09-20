@@ -275,7 +275,6 @@ impl Lexer {
                         let t = self.read_interger_start_token()?;
                         Ok(t)
                     } else {
-                        println!("foo -> {}", c);
                         todo!()
                     }
                 }

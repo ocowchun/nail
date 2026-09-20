@@ -322,8 +322,6 @@ async fn parse_query_request(request: Request<Incoming>) -> Result<QueryRequest,
         }
     };
 
-    println!("query_request-> {:?}", raw_request);
-
     QueryRequest::try_from(raw_request)
 }
 
@@ -340,7 +338,6 @@ async fn handle_query(
     };
 
     let query_exec = QueryExec::new(Arc::clone(&context.head));
-    println!("query req -> {:?}", &req);
     let res = match query_exec.query(req) {
         Ok(res) => res,
         Err(err) => match err {

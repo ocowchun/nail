@@ -1,5 +1,4 @@
 use std::{
-    iter::Peekable,
     str::Chars,
     sync::Arc,
     time::{Duration, Instant},
@@ -12,8 +11,8 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use reqwest::Client;
 
 use crate::{
-    core::{Label, Labels},
-    head::{Head, Sample, SeriesKey, TimestampSecond},
+    core::{Label, Labels, Sample, SeriesKey, TimestampSecond},
+    head::Head,
 };
 
 #[derive(Debug)]

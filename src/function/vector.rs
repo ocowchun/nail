@@ -1,9 +1,9 @@
 use crate::{
     analyzer::ExpressionType,
+    core::Sample,
+    core::TimestampSecond,
     function::types::{EvalValue, FunctionSpec, QueryContext},
-    head::Sample,
-    query_exec::InstantSeries,
-    query_exec::SeriesListInstantIterator,
+    query_exec::{InstantSeries, SeriesListInstantIterator},
 };
 
 pub fn eval_vector(mut args: Vec<EvalValue>, context: QueryContext) -> Result<EvalValue, String> {
@@ -14,7 +14,7 @@ pub fn eval_vector(mut args: Vec<EvalValue>, context: QueryContext) -> Result<Ev
     let samples = context
         .query_points
         .into_iter()
-        .map(|v| Sample::new(crate::head::TimestampSecond(v), num))
+        .map(|v| Sample::new(TimestampSecond(v), num))
         .collect();
 
     let series = InstantSeries::new(vec![], samples);

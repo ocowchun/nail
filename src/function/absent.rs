@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use crate::{
     analyzer::ExpressionType,
+    core::{Sample, TimestampSecond},
     function::types::{EvalValue, FunctionSpec, QueryContext},
-    head::{Sample, TimestampSecond},
     query_exec::{InstantSeries, InstantSeriesIterator, RangeSeriesIterator},
 };
 
@@ -125,7 +125,8 @@ pub static ABSENT_OVER_TIME_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
 #[cfg(test)]
 mod tests {
     use crate::{
-        head::{Sample, TimeRange, TimestampSecond},
+        core::{Sample, TimestampSecond},
+        head::TimeRange,
         query_exec::{
             InstantSeries, InstantSeriesIterator, RangeSample, RangeSeries,
             SeriesListInstantIterator, SeriesListRangeIterator,

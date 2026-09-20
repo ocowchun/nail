@@ -9,46 +9,9 @@ use regex::Regex;
 
 use crate::{
     ast::{LabelMatcher, LabelMatcherOperator},
-    core::Label,
+    core::{Label, Sample, SeriesKey, TimestampSecond},
     request::QueryLabelValuesRequest,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TimestampSecond(pub i64);
-impl TimestampSecond {
-    pub fn new(v: i64) -> Self {
-        Self(v)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Sample {
-    pub timestamp: TimestampSecond,
-    pub value: f64,
-}
-impl Sample {
-    pub fn new(timestamp: TimestampSecond, value: f64) -> Self {
-        Self { timestamp, value }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SeriesKey {
-    labels: Vec<Label>,
-}
-
-impl SeriesKey {
-    pub fn from(mut labels: Vec<Label>) -> Result<Self, String> {
-        labels.sort_by(|left, right| left.name.cmp(&right.name));
-        for pair in labels.windows(2) {
-            if pair[0].name == pair[1].name {
-                return Err(format!("duplicate label name {}", pair[0].name));
-            }
-        }
-
-        Ok(Self { labels })
-    }
-}
 
 #[derive(Debug)]
 struct Series {

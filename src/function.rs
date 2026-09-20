@@ -1,6 +1,7 @@
 mod absent;
 mod clamp;
 mod math;
+mod quantile;
 mod rate;
 mod time;
 mod types;
@@ -25,6 +26,7 @@ static FUNCTIONS: &[&FunctionSpec] = &[
     &math::ROUND_FUNCTION_SPEC,
     &math::SQRT_FUNCTION_SPEC,
     &rate::RATE_FUNCTION_SPEC,
+    &quantile::HISTOGRAM_QUANTILE_FUNCTION_SPEC,
     &time::TIME_FUNCTION_SPEC,
     &time::DAY_OF_MONTH_FUNCTION_SPEC,
     &time::DAY_OF_WEEK_FUNCTION_SPEC,
