@@ -1,5 +1,6 @@
 mod absent;
 mod clamp;
+mod deriv;
 mod math;
 mod quantile;
 mod rate;
@@ -29,6 +30,7 @@ static FUNCTIONS: &[&FunctionSpec] = &[
     &rate::INCREASE_FUNCTION_SPEC,
     &rate::DELTA_FUNCTION_SPEC,
     &quantile::HISTOGRAM_QUANTILE_FUNCTION_SPEC,
+    &deriv::DERIV_FUNCTION_SPEC,
     &time::TIME_FUNCTION_SPEC,
     &time::DAY_OF_MONTH_FUNCTION_SPEC,
     &time::DAY_OF_WEEK_FUNCTION_SPEC,
