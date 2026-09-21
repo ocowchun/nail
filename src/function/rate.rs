@@ -5,20 +5,13 @@ use crate::{
     query_exec::{InstantSeries, InstantSeriesIterator, RangeSample, RangeSeriesIterator},
 };
 
-pub fn eval_rate(mut args: Vec<EvalValue>, _context: QueryContext) -> Result<EvalValue, String> {
-    let EvalValue::Range(inner) = args.remove(0) else {
-        unreachable!("validated by analyzer");
-    };
-
-    let iter = RateIterator::new(inner);
-    Ok(EvalValue::Instant(Box::new(iter)))
-}
-
 struct RateIterator {
     inner: Box<dyn RangeSeriesIterator>,
+    is_counter: bool,
+    is_rate: bool,
 }
 
-fn rate(range_sample: RangeSample) -> Option<f64> {
+fn extrapolated_rate(range_sample: RangeSample, is_counter: bool, is_rate: bool) -> Option<f64> {
     let samples = range_sample.samples;
     let range_start_secs = range_sample.range.start.0 as f64;
     let range_end_secs = range_sample.range.end.0 as f64;
@@ -30,9 +23,11 @@ fn rate(range_sample: RangeSample) -> Option<f64> {
 
     let mut increase = last.value - first.value;
 
-    for pair in samples.windows(2) {
-        if pair[1].value < pair[0].value {
-            increase += pair[0].value; // counter reset
+    if is_counter {
+        for pair in samples.windows(2) {
+            if pair[1].value < pair[0].value {
+                increase += pair[0].value; // counter reset
+            }
         }
     }
 
@@ -60,12 +55,20 @@ fn rate(range_sample: RangeSample) -> Option<f64> {
     let extrapolated_increase =
         increase * (sampled_interval + to_start + to_end) / sampled_interval;
 
-    Some(extrapolated_increase / (range_end_secs - range_start_secs))
+    if is_rate {
+        Some(extrapolated_increase / (range_end_secs - range_start_secs))
+    } else {
+        Some(extrapolated_increase)
+    }
 }
 
 impl RateIterator {
-    pub fn new(inner: Box<dyn RangeSeriesIterator>) -> Self {
-        Self { inner }
+    pub fn new(inner: Box<dyn RangeSeriesIterator>, is_counter: bool, is_rate: bool) -> Self {
+        Self {
+            inner,
+            is_counter,
+            is_rate,
+        }
     }
 }
 
@@ -77,7 +80,7 @@ impl InstantSeriesIterator for RateIterator {
         if let Some(series) = series {
             for sample in series.samples.into_iter() {
                 let timestamp = sample.range.end.clone();
-                if let Some(val) = rate(sample) {
+                if let Some(val) = extrapolated_rate(sample, self.is_counter, self.is_rate) {
                     samples.push(Sample::new(timestamp, val));
                 }
             }
@@ -95,11 +98,52 @@ impl InstantSeriesIterator for RateIterator {
     }
 }
 
+fn eval_rate(mut args: Vec<EvalValue>, _context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Range(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    let iter = RateIterator::new(inner, true, true);
+    Ok(EvalValue::Instant(Box::new(iter)))
+}
+
 pub static RATE_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
     name: "rate",
     arg_types: &[ExpressionType::RangeVector],
     return_type: ExpressionType::InstantVector,
     eval: eval_rate,
+};
+
+fn eval_increase(mut args: Vec<EvalValue>, _context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Range(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    let iter = RateIterator::new(inner, true, false);
+    Ok(EvalValue::Instant(Box::new(iter)))
+}
+
+pub static INCREASE_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "increase",
+    arg_types: &[ExpressionType::RangeVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_increase,
+};
+
+fn eval_delta(mut args: Vec<EvalValue>, _context: QueryContext) -> Result<EvalValue, String> {
+    let EvalValue::Range(inner) = args.remove(0) else {
+        unreachable!("validated by analyzer");
+    };
+
+    let iter = RateIterator::new(inner, false, false);
+    Ok(EvalValue::Instant(Box::new(iter)))
+}
+
+pub static DELTA_FUNCTION_SPEC: FunctionSpec = FunctionSpec {
+    name: "delta",
+    arg_types: &[ExpressionType::RangeVector],
+    return_type: ExpressionType::InstantVector,
+    eval: eval_delta,
 };
 
 #[cfg(test)]
@@ -111,6 +155,54 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn test_extrapolated_rate() {
+        let samples = vec![
+            Sample::new(TimestampSecond(1), 2.0),
+            Sample::new(TimestampSecond(2), 4.0),
+            Sample::new(TimestampSecond(3), 6.0),
+        ];
+        let range_sample = RangeSample::new(
+            TimeRange::new(TimestampSecond(0), TimestampSecond(3)),
+            samples,
+        );
+        let res = extrapolated_rate(range_sample, true, true).unwrap();
+
+        assert_eq!(res, 2.0);
+    }
+
+    #[test]
+    fn test_extrapolated_rate_when_is_not_rate() {
+        let samples = vec![
+            Sample::new(TimestampSecond(1), 2.0),
+            Sample::new(TimestampSecond(2), 4.0),
+            Sample::new(TimestampSecond(3), 6.0),
+        ];
+        let range_sample = RangeSample::new(
+            TimeRange::new(TimestampSecond(0), TimestampSecond(3)),
+            samples,
+        );
+        let res = extrapolated_rate(range_sample, true, false).unwrap();
+
+        assert_eq!(res, 6.0);
+    }
+
+    #[test]
+    fn test_extrapolated_rate_when_is_not_counter_nor_rate() {
+        let samples = vec![
+            Sample::new(TimestampSecond(1), 2.0),
+            Sample::new(TimestampSecond(2), 1.0),
+            Sample::new(TimestampSecond(3), 6.0),
+        ];
+        let range_sample = RangeSample::new(
+            TimeRange::new(TimestampSecond(0), TimestampSecond(3)),
+            samples,
+        );
+        let res = extrapolated_rate(range_sample, false, false).unwrap();
+
+        assert_eq!(res, 6.0);
+    }
 
     #[test]
     fn test_rate_function() {
@@ -153,6 +245,100 @@ mod tests {
             assert_eq!(actual.len(), 2);
             for (_, sample) in actual[0].samples.iter().enumerate() {
                 assert_eq!(sample.value, 1.0);
+            }
+        } else {
+            panic!("unexpected eval value");
+        }
+    }
+
+    #[test]
+    fn test_increase_function() {
+        let series_group = vec!["foo", "bar"]
+            .iter()
+            .map(|service| {
+                let labels = vec![
+                    Label::new("__name__".to_owned(), "my_counter".to_owned()),
+                    Label::new("service".to_owned(), service.to_string()),
+                ];
+                let samples = (0..5)
+                    .map(|i| {
+                        let start = TimestampSecond(i);
+                        let end = TimestampSecond(i + 3);
+                        let samples = (start.0..(end.0))
+                            .map(|j| Sample::new(TimestampSecond(j), j as f64))
+                            .collect();
+                        RangeSample::new(TimeRange::new(start, end), samples)
+                    })
+                    .collect();
+                RangeSeries::new(labels, samples)
+            })
+            .collect();
+        let iter = SeriesListRangeIterator::new(series_group);
+
+        let context = QueryContext::new(vec![]);
+        let res = eval_increase(vec![EvalValue::Range(Box::new(iter))], context).unwrap();
+        if let EvalValue::Instant(mut iter) = res {
+            let mut actual = vec![];
+            loop {
+                match iter.next().unwrap() {
+                    Some(sample) => {
+                        actual.push(sample);
+                    }
+                    None => {
+                        break;
+                    }
+                };
+            }
+            assert_eq!(actual.len(), 2);
+            for (_, sample) in actual[0].samples.iter().enumerate() {
+                assert_eq!(sample.value, 3.0);
+            }
+        } else {
+            panic!("unexpected eval value");
+        }
+    }
+
+    #[test]
+    fn test_delta_function() {
+        let series_group = vec!["foo", "bar"]
+            .iter()
+            .map(|service| {
+                let labels = vec![
+                    Label::new("__name__".to_owned(), "my_counter".to_owned()),
+                    Label::new("service".to_owned(), service.to_string()),
+                ];
+                let samples = (0..5)
+                    .map(|i| {
+                        let start = TimestampSecond(i);
+                        let end = TimestampSecond(i + 3);
+                        let samples = (start.0..(end.0))
+                            .map(|j| Sample::new(TimestampSecond(j), j as f64))
+                            .collect();
+                        RangeSample::new(TimeRange::new(start, end), samples)
+                    })
+                    .collect();
+                RangeSeries::new(labels, samples)
+            })
+            .collect();
+        let iter = SeriesListRangeIterator::new(series_group);
+
+        let context = QueryContext::new(vec![]);
+        let res = eval_delta(vec![EvalValue::Range(Box::new(iter))], context).unwrap();
+        if let EvalValue::Instant(mut iter) = res {
+            let mut actual = vec![];
+            loop {
+                match iter.next().unwrap() {
+                    Some(sample) => {
+                        actual.push(sample);
+                    }
+                    None => {
+                        break;
+                    }
+                };
+            }
+            assert_eq!(actual.len(), 2);
+            for (_, sample) in actual[0].samples.iter().enumerate() {
+                assert_eq!(sample.value, 3.0);
             }
         } else {
             panic!("unexpected eval value");
