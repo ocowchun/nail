@@ -1,4 +1,5 @@
 mod absent;
+mod aggregation;
 mod clamp;
 mod deriv;
 mod math;
